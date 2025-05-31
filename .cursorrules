@@ -1,0 +1,38 @@
+# .cursorrules
+## Project snapshot
+Single-repo TypeScript monorepo.  Front-end + API = Next.js 14 (App Router).  
+Data lives in Supabase Postgres (pgvector).  Local CLI seeds embeddings.
+
+## Coding style
+- Use **TypeScript strict mode**; never disable `strict` or use `@ts-ignore`.
+- Prefer **async/await**, no `.then` chains.
+- Functions < 40 lines; if longer, refactor.
+- React components are **top-level named functions** with arrow syntax: `export function Home() { ... }`.
+- Use **ESM imports** (`import foo from '…'`), never `require`.
+- Write **pure utilities** in `packages/`; UI logic stays in `apps/web`.
+
+## Naming & structure
+- Snake-case SQL, **camelCase TS**.
+- Paths: `/app/api/<name>/route.ts` for API, `/scripts/*.ts` for CLIs.
+- Screenshots stored under Supabase bucket `screenshots/:timestamp-:host.jpg`.
+
+## Database access
+- Use **Supabase server client** inside API routes; never hard-code SQL in the UI.
+- Always parameterise SQL; no string concatenation.
+- For similarity queries call RPC `match_vectors(query_emb, match_count)`.
+
+## Next.js rules
+- Server actions **only** for non-idempotent ops (e.g., enqueue seeds); otherwise use API route.
+- Never put environment secrets in client bundles; read via `process.env.*` on the server.
+
+## Security / secrets
+- Never commit keys; expect them in `.env.*`.
+- Strip screenshot EXIF before upload.
+
+## “Never” list
+- **Never** leave partial code (`// …rest remains`).
+- **Never** push console logs except in scripts.
+- **Never** bypass ESLint/Prettier rules.
+
+## Testing
+- All helpers in `packages/` need Jest unit tests in `__tests__/`.
