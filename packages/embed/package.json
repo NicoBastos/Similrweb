@@ -6,8 +6,7 @@
   "main": "index.ts",
   "dependencies": {
     "openai": "^4.0.0",
-    "p-retry": "^6.0.0",
-    "p-limit": "^5.0.0"
+    "p-retry": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

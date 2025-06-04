@@ -1,5 +1,5 @@
 "use client";
-
+import 'dotenv/config';
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,13 +30,15 @@ export default function FindPage() {
     setError("");
     
     try {
+      const normalizedUrl = normalizeUrl(url.trim());
+      
       // TODO: Replace with actual API endpoint
       const response = await fetch("/api/find-similar", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: normalizedUrl }),
       });
 
       if (!response.ok) {
@@ -52,9 +54,17 @@ export default function FindPage() {
     }
   };
 
+  const normalizeUrl = (inputUrl: string) => {
+    // Add https:// if no protocol is provided
+    if (!inputUrl.match(/^https?:\/\//)) {
+      return `https://${inputUrl}`;
+    }
+    return inputUrl;
+  };
+
   const isValidUrl = (string: string) => {
     try {
-      new URL(string);
+      new URL(normalizeUrl(string));
       return true;
     } catch {
       return false;
@@ -99,7 +109,7 @@ export default function FindPage() {
                   <div className="flex-1 relative">
                     <Globe className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-5 h-5" />
                     <Input
-                      type="url"
+                      type="text"
                       placeholder="https://example.com"
                       value={url}
                       onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}

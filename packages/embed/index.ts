@@ -3,18 +3,77 @@
 
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 import pRetry from 'p-retry';
-import pLimit from 'p-limit';
 
 /*─────────────────────────────*
  * 1. Configuration & limits   *
  *─────────────────────────────*/
-const limit = pLimit(3);               // only 3 parallel calls for resource management
 
-// Environment-aware Python path
+// Simple rate limiting without p-limit
+class SimpleRateLimit {
+  private queue: Array<() => Promise<any>> = [];
+  private running = 0;
+  private maxConcurrency: number;
+
+  constructor(maxConcurrency: number) {
+    this.maxConcurrency = maxConcurrency;
+  }
+
+  async add<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await fn();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      this.processQueue();
+    });
+  }
+
+  private async processQueue() {
+    if (this.running >= this.maxConcurrency || this.queue.length === 0) {
+      return;
+    }
+
+    this.running++;
+    const task = this.queue.shift()!;
+    
+    try {
+      await task();
+    } finally {
+      this.running--;
+      this.processQueue();
+    }
+  }
+}
+
+const limit = new SimpleRateLimit(3);
+
+// Environment-aware Python path - use more robust workspace root detection
+function findWorkspaceRoot(): string {
+  const cwd = process.cwd();
+  // Check if we're already at workspace root
+  if (cwd.endsWith('website-similarity')) {
+    return cwd;
+  }
+  // Check if we're in a subdirectory and can find the workspace root
+  const parts = cwd.split('/');
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i] === 'website-similarity') {
+      return parts.slice(0, i + 1).join('/');
+    }
+  }
+  // Fallback: assume workspace root is current directory
+  return cwd;
+}
+
 const pythonPath = process.env.NODE_ENV === 'production' 
   ? 'python3'  // Use system Python in production
-  : '.venv/bin/python';  // Use venv in development
+  : resolve(findWorkspaceRoot(), '.venv/bin/python');  // Use workspace root venv
 
 /*─────────────────────────────*
  * 2. Simple in-process cache  *
@@ -33,6 +92,9 @@ function hash(buf: Buffer) {
 /** Call Python CLIP script to embed image */
 async function runClipEmbedding(buffer: Buffer): Promise<number[]> {
   return new Promise((resolve, reject) => {
+    console.log(`🐍 Using Python path: ${pythonPath}`);
+    console.log(`📁 Current working directory: ${process.cwd()}`);
+    
     const python = spawn(pythonPath, ['-c', CLIP_SCRIPT], {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: process.cwd()
@@ -40,6 +102,11 @@ async function runClipEmbedding(buffer: Buffer): Promise<number[]> {
 
     let stdout = '';
     let stderr = '';
+
+    python.on('error', (err) => {
+      console.error('🚨 Python spawn error:', err);
+      reject(new Error(`Failed to spawn Python process: ${err.message}`));
+    });
 
     python.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -114,7 +181,7 @@ export async function embedImage(buffer: Buffer | Uint8Array): Promise<number[]>
 
   if (cache.has(key)) return cache.get(key)!;
 
-  const vector = await limit(() =>
+  const vector = await limit.add(() =>
     pRetry(
       () => runClipEmbedding(buf),
       { retries: 3, factor: 2 } // exponential back-off on failures
