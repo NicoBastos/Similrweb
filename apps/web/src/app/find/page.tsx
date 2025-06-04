@@ -148,6 +148,35 @@ export default function FindPage() {
           </Card>
 
           {/* Results Section */}
+          {isLoading && (
+            <div className="space-y-6">
+              <div className="text-center py-12">
+                <div className="relative w-24 h-24 mx-auto mb-6">
+                  {/* Outer rotating ring */}
+                  <div className="absolute inset-0 rounded-full border-4 border-primary/20"></div>
+                  <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-primary animate-spin"></div>
+                  
+                  {/* Inner pulsing circle */}
+                  <div className="absolute inset-4 rounded-full bg-primary/10 animate-pulse flex items-center justify-center">
+                    <Search className="w-8 h-8 text-primary animate-bounce" />
+                  </div>
+                </div>
+                
+                <h3 className="text-xl font-semibold mb-2">Analyzing Website</h3>
+                <p className="text-muted-foreground mb-4">
+                  We're capturing and analyzing the website design patterns...
+                </p>
+                
+                {/* Animated progress dots */}
+                <div className="flex justify-center space-x-1">
+                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {results.length > 0 && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
