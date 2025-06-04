@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@website-similarity/db";
+import { createHash } from "node:crypto";
 
 interface SimilarWebsite {
   id: number;
@@ -7,6 +8,58 @@ interface SimilarWebsite {
   screenshot_url: string;
   similarity: number;
   created_at: string;
+}
+
+interface CachedApiResult {
+  data: any;
+  timestamp: number;
+  expiresAt: number;
+}
+
+// In-memory cache for API results (expires after 15 minutes)
+const apiCache = new Map<string, CachedApiResult>();
+const CACHE_DURATION = 15 * 60 * 1000; // 15 minutes
+
+// Clean up expired cache entries periodically
+const cleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of apiCache.entries()) {
+    if (now > value.expiresAt) {
+      apiCache.delete(key);
+    }
+  }
+}, 5 * 60 * 1000); // Clean up every 5 minutes
+
+// Graceful cleanup on process exit
+process.on('SIGINT', () => {
+  clearInterval(cleanupInterval);
+});
+process.on('SIGTERM', () => {
+  clearInterval(cleanupInterval);
+});
+
+function getCacheKey(url: string): string {
+  return createHash('sha256').update(url.toLowerCase()).digest('hex');
+}
+
+function getCachedResult(cacheKey: string): any | null {
+  const cached = apiCache.get(cacheKey);
+  if (!cached) return null;
+  
+  if (Date.now() > cached.expiresAt) {
+    apiCache.delete(cacheKey);
+    return null;
+  }
+  
+  return cached.data;
+}
+
+function setCachedResult(cacheKey: string, data: any): void {
+  apiCache.set(cacheKey, {
+    data,
+    timestamp: Date.now(),
+    expiresAt: Date.now() + CACHE_DURATION
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -28,6 +81,21 @@ export async function POST(request: NextRequest) {
         { error: "Invalid URL format" },
         { status: 400 }
       );
+    }
+
+    // Check server-side cache first
+    const cacheKey = getCacheKey(url);
+    const cachedResult = getCachedResult(cacheKey);
+    
+    if (cachedResult) {
+      console.log('🎯 Server cache hit for:', url);
+      return NextResponse.json(cachedResult, {
+        headers: {
+          'Cache-Control': 'public, max-age=900, s-maxage=1800', // 15 min browser, 30 min CDN
+          'X-Cache': 'HIT',
+          'X-Cache-Key': cacheKey.substring(0, 8) + '...'
+        }
+      });
     }
 
     console.log('🔍 Finding similar websites for:', url);
@@ -87,11 +155,26 @@ export async function POST(request: NextRequest) {
 
     if (!similarWebsites || similarWebsites.length === 0) {
       console.log('📭 No similar websites found');
-      return NextResponse.json({
+      const emptyResult = {
         similar_websites: [],
         query_url: url,
         processed_at: new Date().toISOString(),
         message: "No similar websites found in database"
+      };
+      
+      // Cache empty results for shorter time (5 minutes)
+      apiCache.set(cacheKey, {
+        data: emptyResult,
+        timestamp: Date.now(),
+        expiresAt: Date.now() + (5 * 60 * 1000)
+      });
+      
+      return NextResponse.json(emptyResult, {
+        headers: {
+          'Cache-Control': 'public, max-age=300, s-maxage=600', // 5 min browser, 10 min CDN
+          'X-Cache': 'MISS',
+          'X-Cache-Key': cacheKey.substring(0, 8) + '...'
+        }
       });
     }
 
@@ -107,11 +190,24 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ Found ${transformedResults.length} similar websites`);
 
-    return NextResponse.json({
+    const result = {
       similar_websites: transformedResults,
       query_url: url,
       query_embedding_dimensions: queryEmbedding.length,
-      processed_at: new Date().toISOString()
+      processed_at: new Date().toISOString(),
+      cache_status: 'MISS'
+    };
+
+    // Cache the successful result
+    setCachedResult(cacheKey, result);
+
+    return NextResponse.json(result, {
+      headers: {
+        'Cache-Control': 'public, max-age=900, s-maxage=1800', // 15 min browser, 30 min CDN
+        'X-Cache': 'MISS',
+        'X-Cache-Key': cacheKey.substring(0, 8) + '...',
+        'X-Cache-Size': apiCache.size.toString()
+      }
     });
 
   } catch (error) {
@@ -126,4 +222,24 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// Add GET endpoint for cache statistics
+export async function GET() {
+  const cacheStats = {
+    cache_size: apiCache.size,
+    cache_keys: Array.from(apiCache.keys()).map(key => ({
+      key: key.substring(0, 8) + '...',
+      timestamp: apiCache.get(key)?.timestamp,
+      expires_in_ms: Math.max(0, (apiCache.get(key)?.expiresAt || 0) - Date.now())
+    })),
+    cache_duration_ms: CACHE_DURATION,
+    timestamp: new Date().toISOString()
+  };
+  
+  return NextResponse.json(cacheStats, {
+    headers: {
+      'Cache-Control': 'no-cache'
+    }
+  });
 } 

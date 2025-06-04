@@ -2,11 +2,69 @@ import { NextRequest, NextResponse } from 'next/server';
 import { embedImage } from '@website-similarity/embed';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
+import { createHash } from 'node:crypto';
 
 // Screenshot configuration (from seed.ts)
 const VIEWPORT_WIDTH = 1980;
 const VIEWPORT_HEIGHT = 1080;
 const SCREENSHOT_TIMEOUT = 3000;
+
+interface CachedEmbedResult {
+  data: {
+    url: string;
+    embedding: number[];
+    dimensions: number;
+    success: boolean;
+  };
+  timestamp: number;
+  expiresAt: number;
+}
+
+// In-memory cache for embed results (expires after 60 minutes since these are expensive)
+const embedCache = new Map<string, CachedEmbedResult>();
+const EMBED_CACHE_DURATION = 60 * 60 * 1000; // 60 minutes
+
+// Clean up expired embed cache entries periodically
+const embedCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of embedCache.entries()) {
+    if (now > value.expiresAt) {
+      embedCache.delete(key);
+    }
+  }
+}, 10 * 60 * 1000); // Clean up every 10 minutes
+
+// Graceful cleanup on process exit
+process.on('SIGINT', () => {
+  clearInterval(embedCleanupInterval);
+});
+process.on('SIGTERM', () => {
+  clearInterval(embedCleanupInterval);
+});
+
+function getEmbedCacheKey(url: string): string {
+  return createHash('sha256').update(url.toLowerCase().trim()).digest('hex');
+}
+
+function getCachedEmbedResult(cacheKey: string): any | null {
+  const cached = embedCache.get(cacheKey);
+  if (!cached) return null;
+  
+  if (Date.now() > cached.expiresAt) {
+    embedCache.delete(cacheKey);
+    return null;
+  }
+  
+  return cached.data;
+}
+
+function setCachedEmbedResult(cacheKey: string, data: any): void {
+  embedCache.set(cacheKey, {
+    data,
+    timestamp: Date.now(),
+    expiresAt: Date.now() + EMBED_CACHE_DURATION
+  });
+}
 
 async function takeScreenshot(browser: Browser, url: string): Promise<{ success: boolean; buffer?: Buffer; error?: string }> {
   let page: Page | null = null;
@@ -124,6 +182,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid URL format' }, { status: 400 });
     }
 
+    // Check embed cache first
+    const cacheKey = getEmbedCacheKey(url);
+    const cachedResult = getCachedEmbedResult(cacheKey);
+    
+    if (cachedResult) {
+      console.log('🎯 Embed cache hit for:', url);
+      return NextResponse.json(cachedResult, {
+        headers: {
+          'Cache-Control': 'public, max-age=3600, s-maxage=7200', // 1 hour browser, 2 hours CDN
+          'X-Cache': 'HIT',
+          'X-Cache-Key': cacheKey.substring(0, 8) + '...'
+        }
+      });
+    }
+
     console.log('🚀 Starting embed process for', url);
     
     // Launch browser
@@ -145,11 +218,23 @@ export async function POST(request: NextRequest) {
     const embedding = await embedImage(screenshotResult.buffer);
     console.log('✅ Embedding completed for', new URL(url).hostname, `(${embedding.length} dimensions)`);
     
-    return NextResponse.json({ 
+    const result = { 
       url,
       embedding,
       dimensions: embedding.length,
       success: true 
+    };
+
+    // Cache the successful result
+    setCachedEmbedResult(cacheKey, result);
+    
+    return NextResponse.json(result, {
+      headers: {
+        'Cache-Control': 'public, max-age=3600, s-maxage=7200', // 1 hour browser, 2 hours CDN
+        'X-Cache': 'MISS',
+        'X-Cache-Key': cacheKey.substring(0, 8) + '...',
+        'X-Cache-Size': embedCache.size.toString()
+      }
     });
     
   } catch (error) {
@@ -173,17 +258,35 @@ export async function GET() {
     const { checkHealth } = await import('@website-similarity/embed');
     const isHealthy = await checkHealth();
     
-    return NextResponse.json({
+    const healthData = {
       status: isHealthy ? 'healthy' : 'unhealthy',
       service: 'CLIP embedding with screenshot',
+      embed_cache_size: embedCache.size,
+      embed_cache_entries: Array.from(embedCache.keys()).map(key => ({
+        key: key.substring(0, 8) + '...',
+        expires_in_ms: Math.max(0, (embedCache.get(key)?.expiresAt || 0) - Date.now())
+      })),
       timestamp: new Date().toISOString()
-    }, { status: isHealthy ? 200 : 503 });
+    };
+    
+    return NextResponse.json(healthData, { 
+      status: isHealthy ? 200 : 503,
+      headers: {
+        'Cache-Control': 'no-cache'
+      }
+    });
   } catch (error) {
     return NextResponse.json({
       status: 'unhealthy',
       service: 'CLIP embedding with screenshot',
       error: error instanceof Error ? error.message : 'Unknown error',
+      embed_cache_size: embedCache.size,
       timestamp: new Date().toISOString()
-    }, { status: 503 });
+    }, { 
+      status: 503,
+      headers: {
+        'Cache-Control': 'no-cache'
+      }
+    });
   }
 } 

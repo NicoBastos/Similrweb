@@ -1,6 +1,6 @@
 "use client";
 import 'dotenv/config';
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,11 +16,78 @@ interface SimilarWebsite {
   similarity_score?: number;
 }
 
+interface CachedResult {
+  results: SimilarWebsite[];
+  timestamp: number;
+  expiresAt: number;
+}
+
+// Cache configuration
+const CACHE_DURATION = 30 * 60 * 1000; // 30 minutes in milliseconds
+
 export default function FindPage() {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<SimilarWebsite[]>([]);
   const [error, setError] = useState("");
+  const [cacheHit, setCacheHit] = useState(false);
+
+  // Check cache on component mount
+  useEffect(() => {
+    // Clear expired cache entries on page load
+    clearExpiredCache();
+  }, []);
+
+  const getCacheKey = (normalizedUrl: string) => `similarity_cache_${normalizedUrl}`;
+
+  const clearExpiredCache = () => {
+    const keys = Object.keys(localStorage).filter(key => key.startsWith('similarity_cache_'));
+    keys.forEach(key => {
+      try {
+        const cached = JSON.parse(localStorage.getItem(key) || '{}') as CachedResult;
+        if (cached.expiresAt && Date.now() > cached.expiresAt) {
+          localStorage.removeItem(key);
+        }
+      } catch {
+        // Invalid cache entry, remove it
+        localStorage.removeItem(key);
+      }
+    });
+  };
+
+  const getCachedResult = (normalizedUrl: string): SimilarWebsite[] | null => {
+    try {
+      const cacheKey = getCacheKey(normalizedUrl);
+      const cached = localStorage.getItem(cacheKey);
+      if (!cached) return null;
+
+      const cachedResult = JSON.parse(cached) as CachedResult;
+      
+      // Check if cache is still valid
+      if (Date.now() > cachedResult.expiresAt) {
+        localStorage.removeItem(cacheKey);
+        return null;
+      }
+
+      return cachedResult.results;
+    } catch {
+      return null;
+    }
+  };
+
+  const setCachedResult = (normalizedUrl: string, results: SimilarWebsite[]) => {
+    try {
+      const cacheKey = getCacheKey(normalizedUrl);
+      const cachedResult: CachedResult = {
+        results,
+        timestamp: Date.now(),
+        expiresAt: Date.now() + CACHE_DURATION
+      };
+      localStorage.setItem(cacheKey, JSON.stringify(cachedResult));
+    } catch (error) {
+      console.warn('Failed to cache results:', error);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,11 +95,23 @@ export default function FindPage() {
 
     setIsLoading(true);
     setError("");
+    setCacheHit(false);
     
     try {
       const normalizedUrl = normalizeUrl(url.trim());
       
-      // TODO: Replace with actual API endpoint
+      // Check cache first
+      const cachedResults = getCachedResult(normalizedUrl);
+      if (cachedResults) {
+        console.log('🎯 Cache hit for:', normalizedUrl);
+        setResults(cachedResults);
+        setCacheHit(true);
+        setIsLoading(false);
+        return;
+      }
+
+      console.log('🔍 Cache miss, fetching from API for:', normalizedUrl);
+      
       const response = await fetch("/api/find-similar", {
         method: "POST",
         headers: {
@@ -46,7 +125,13 @@ export default function FindPage() {
       }
 
       const data = await response.json();
-      setResults(data.similar_websites || []);
+      const similarWebsites = data.similar_websites || [];
+      
+      setResults(similarWebsites);
+      
+      // Cache the results for future use
+      setCachedResult(normalizedUrl, similarWebsites);
+      
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -183,9 +268,16 @@ export default function FindPage() {
                 <h2 className="text-2xl font-bold">
                   Similar Websites
                 </h2>
-                <Badge variant="outline" className="text-sm">
-                  {results.length} results found
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-sm">
+                    {results.length} results found
+                  </Badge>
+                  {cacheHit && (
+                    <Badge variant="secondary" className="text-sm bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400">
+                      ⚡ Cached Result
+                    </Badge>
+                  )}
+                </div>
               </div>
 
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
