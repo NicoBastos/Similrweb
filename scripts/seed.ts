@@ -9,12 +9,13 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 // Configuration
-const SCREENSHOT_CONCURRENT_LIMIT = 5; // Number of concurrent screenshot operations
-const EMBEDDING_CONCURRENT_LIMIT = 3; // Number of concurrent embedding operations
-const DATABASE_CONCURRENT_LIMIT = 10; // Number of concurrent database operations
+const SCREENSHOT_CONCURRENT_LIMIT = 15; // Increased from 5
+const EMBEDDING_CONCURRENT_LIMIT = 8; // Increased from 3 
+const DATABASE_CONCURRENT_LIMIT = 25; // Increased from 10
+const BATCH_SIZE = 100; // Process URLs in batches of 100
 const VIEWPORT_WIDTH = 1980;
 const VIEWPORT_HEIGHT = 1080;
-const SCREENSHOT_TIMEOUT = 40000;
+const SCREENSHOT_TIMEOUT = 3000; // Reduced from 5000
 
 interface ScreenshotResult {
   url: string;
@@ -38,6 +39,21 @@ interface ProcessResult {
   error?: string;
 }
 
+interface ProgressTracker {
+  totalUrls: number;
+  completedUrls: number;
+  currentPhase: string;
+  phaseProgress: string;
+}
+
+function reportProgress(tracker: ProgressTracker) {
+  const remaining = tracker.totalUrls - tracker.completedUrls;
+  const percentage = tracker.totalUrls > 0 ? Math.round((tracker.completedUrls / tracker.totalUrls) * 100) : 0;
+  
+  console.log(`\n📊 OVERALL PROGRESS: ${tracker.completedUrls}/${tracker.totalUrls} completed (${percentage}%) | ${remaining} remaining`);
+  console.log(`🔄 Current: ${tracker.currentPhase} ${tracker.phaseProgress}`);
+}
+
 async function takeScreenshot(browser: Browser, url: string): Promise<ScreenshotResult> {
   let page: Page | null = null;
   
@@ -47,7 +63,7 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT } 
     });
     
-    await page.goto(url, { waitUntil: 'networkidle', timeout: SCREENSHOT_TIMEOUT });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SCREENSHOT_TIMEOUT });
     
     // Simulate real user behavior to reveal more content
     try {
@@ -68,7 +84,7 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
           const element = await page.$(selector);
           if (element) {
             await element.click();
-            await page.waitForTimeout(500); // Wait for animation
+            await page.waitForTimeout(200); // Reduced from 500
             break; // Only dismiss one popup
           }
         } catch {
@@ -79,20 +95,20 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
       // 2. Scroll to trigger lazy loading and scroll animations
       console.log('🔄 Scrolling to reveal lazy-loaded content for', new URL(url).hostname);
       await page.evaluate(() => {
-        // Smooth scroll to bottom to trigger lazy loading
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        // Instant scroll to bottom to trigger lazy loading
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' }); // Changed from 'smooth'
       });
-      await page.waitForTimeout(2000); // Wait for content to load
+      await page.waitForTimeout(500); // Reduced from 2000
       
       // Scroll back to top for the screenshot
       await page.evaluate(() => {
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: 'auto' }); // Changed from 'smooth'
       });
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(200); // Reduced from 1000
 
       // 3. Wait for fonts and delayed animations
       console.log('⏳ Waiting for fonts and animations to complete for', new URL(url).hostname);
-      await page.waitForLoadState('networkidle');
+      await page.waitForTimeout(300); // Replaced waitForLoadState('networkidle') with fixed timeout
       
       // 4. Trigger any auto-playing elements that might need interaction
       await page.evaluate(() => {
@@ -110,7 +126,7 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
           carouselNext.click();
         }
       });
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(200); // Reduced from 1000
 
     } catch (err) {
       console.log('⚠️ Some interactive elements failed for', new URL(url).hostname, '- continuing with screenshot');
@@ -221,13 +237,25 @@ async function processConcurrentBatch<T, R>(
   items: T[], 
   processor: (item: T) => Promise<R>, 
   concurrencyLimit: number,
-  stageName: string
+  stageName: string,
+  progressTracker?: ProgressTracker
 ): Promise<R[]> {
   const results: R[] = [];
   
   for (let i = 0; i < items.length; i += concurrencyLimit) {
     const batch = items.slice(i, i + concurrencyLimit);
-    console.log(`\n🚀 ${stageName} batch ${Math.floor(i / concurrencyLimit) + 1}/${Math.ceil(items.length / concurrencyLimit)} (items ${i + 1}-${Math.min(i + concurrencyLimit, items.length)} of ${items.length})`);
+    const batchNum = Math.floor(i / concurrencyLimit) + 1;
+    const totalBatches = Math.ceil(items.length / concurrencyLimit);
+    const batchProgress = `(batch ${batchNum}/${totalBatches})`;
+    
+    console.log(`\n🚀 ${stageName} ${batchProgress} - processing items ${i + 1}-${Math.min(i + concurrencyLimit, items.length)} of ${items.length}`);
+    
+    // Update progress tracker if provided
+    if (progressTracker) {
+      progressTracker.currentPhase = stageName;
+      progressTracker.phaseProgress = batchProgress;
+      reportProgress(progressTracker);
+    }
     
     const batchPromises = batch.map(processor);
     const batchResults = await Promise.all(batchPromises);
@@ -243,69 +271,162 @@ async function processConcurrentBatch<T, R>(
   return results;
 }
 
-async function processUrls(browser: Browser, urls: string[]): Promise<ProcessResult[]> {
-  console.log('\n📷 PHASE 1: Taking screenshots');
-  console.log('=' .repeat(50));
+async function processBatchPipeline(
+  browser: Browser, 
+  urls: string[], 
+  batchNumber: number, 
+  totalBatches: number,
+  progressTracker: ProgressTracker
+): Promise<ProcessResult[]> {
+  const batchResults: ProcessResult[] = [];
+  
+  console.log(`\n🎯 BATCH ${batchNumber}/${totalBatches}: Processing ${urls.length} URLs`);
+  console.log('='.repeat(70));
+  
+  // Phase 1: Screenshots for this batch
+  console.log(`\n📷 BATCH ${batchNumber}: Taking screenshots`);
   const screenshotResults = await processConcurrentBatch(
     urls,
     (url) => takeScreenshot(browser, url),
     SCREENSHOT_CONCURRENT_LIMIT,
-    'Screenshot'
+    `Batch ${batchNumber} Screenshots`,
+    progressTracker
   );
 
   const successfulScreenshots = screenshotResults.filter(r => r.success);
-  console.log(`\n✅ Screenshots completed: ${successfulScreenshots.length}/${urls.length}`);
+  const failedScreenshots = screenshotResults.filter(r => !r.success);
+  
+  console.log(`✅ Batch ${batchNumber} screenshots: ${successfulScreenshots.length}/${urls.length} successful`);
+  
+  // Add failed screenshots to results
+  failedScreenshots.forEach(r => {
+    batchResults.push({ url: r.url, success: false, error: r.error });
+  });
 
   if (successfulScreenshots.length === 0) {
-    console.log('❌ No successful screenshots, skipping embedding phase');
-    return screenshotResults.map(r => ({ url: r.url, success: r.success, error: r.error }));
+    console.log(`❌ Batch ${batchNumber}: No successful screenshots, skipping remaining phases`);
+    return batchResults;
   }
 
-  console.log('\n🧠 PHASE 2: Generating embeddings');
-  console.log('=' .repeat(50));
+  // Phase 2: Embeddings for successful screenshots in this batch
+  console.log(`\n🧠 BATCH ${batchNumber}: Generating embeddings`);
   const embeddingResults = await processConcurrentBatch(
     successfulScreenshots,
     generateEmbedding,
     EMBEDDING_CONCURRENT_LIMIT,
-    'Embedding'
+    `Batch ${batchNumber} Embeddings`,
+    progressTracker
   );
 
   const successfulEmbeddings = embeddingResults.filter(r => r.success);
-  console.log(`\n✅ Embeddings completed: ${successfulEmbeddings.length}/${successfulScreenshots.length}`);
+  const failedEmbeddings = embeddingResults.filter(r => !r.success);
+  
+  console.log(`✅ Batch ${batchNumber} embeddings: ${successfulEmbeddings.length}/${successfulScreenshots.length} successful`);
+  
+  // Add failed embeddings to results
+  failedEmbeddings.forEach(r => {
+    batchResults.push({ url: r.url, success: false, error: r.error });
+  });
 
   if (successfulEmbeddings.length === 0) {
-    console.log('❌ No successful embeddings, skipping database phase');
-    const allResults = [
-      ...screenshotResults.filter(r => !r.success).map(r => ({ url: r.url, success: r.success, error: r.error })),
-      ...embeddingResults.map(r => ({ url: r.url, success: r.success, error: r.error }))
-    ];
-    return allResults;
+    console.log(`❌ Batch ${batchNumber}: No successful embeddings, skipping database phase`);
+    return batchResults;
   }
 
-  console.log('\n💾 PHASE 3: Inserting into database');
-  console.log('=' .repeat(50));
+  // Phase 3: Database insertions for successful embeddings in this batch
+  console.log(`\n💾 BATCH ${batchNumber}: Inserting into database`);
   const databaseResults = await processConcurrentBatch(
     successfulEmbeddings,
     insertToDatabase,
     DATABASE_CONCURRENT_LIMIT,
-    'Database'
+    `Batch ${batchNumber} Database`,
+    progressTracker
   );
 
-  // Combine all results
+  const successfulInsertions = databaseResults.filter(r => r.success);
+  console.log(`✅ Batch ${batchNumber} database: ${successfulInsertions.length}/${successfulEmbeddings.length} successful`);
+  
+  // Update progress tracker with completed URLs from this batch
+  progressTracker.completedUrls += successfulInsertions.length;
+  
+  // Add all database results to batch results
+  batchResults.push(...databaseResults);
+  
+  console.log(`\n🎉 BATCH ${batchNumber} COMPLETED: ${successfulInsertions.length}/${urls.length} URLs fully processed`);
+  
+  return batchResults;
+}
+
+async function processUrls(browser: Browser, urls: string[]): Promise<ProcessResult[]> {
+  const progressTracker: ProgressTracker = {
+    totalUrls: urls.length,
+    completedUrls: 0,
+    currentPhase: 'Starting',
+    phaseProgress: ''
+  };
+
+  console.log(`\n🎯 STARTING BATCH PROCESSING OF ${urls.length} WEBSITES`);
+  console.log(`📦 Processing in batches of ${BATCH_SIZE} URLs`);
+  reportProgress(progressTracker);
+
   const allResults: ProcessResult[] = [];
+  const totalBatches = Math.ceil(urls.length / BATCH_SIZE);
   
-  // Add failed screenshots
-  screenshotResults.filter(r => !r.success).forEach(r => {
-    allResults.push({ url: r.url, success: false, error: r.error });
-  });
+  // Process URLs in batches of BATCH_SIZE
+  for (let i = 0; i < urls.length; i += BATCH_SIZE) {
+    const batchUrls = urls.slice(i, i + BATCH_SIZE);
+    const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+    
+    // Update progress tracker for current batch
+    progressTracker.currentPhase = `Processing Batch ${batchNumber}/${totalBatches}`;
+    progressTracker.phaseProgress = `${batchUrls.length} URLs`;
+    reportProgress(progressTracker);
+    
+    try {
+      const batchResults = await processBatchPipeline(
+        browser, 
+        batchUrls, 
+        batchNumber, 
+        totalBatches, 
+        progressTracker
+      );
+      
+      allResults.push(...batchResults);
+      
+      // Brief pause between batches (except for the last batch)
+      if (i + BATCH_SIZE < urls.length) {
+        console.log('\n⏳ Waiting 2 seconds before next batch...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error processing batch ${batchNumber}:`, error);
+      // Add failed batch URLs to results
+      batchUrls.forEach(url => {
+        allResults.push({ 
+          url, 
+          success: false, 
+          error: `Batch ${batchNumber} processing failed: ${error instanceof Error ? error.message : String(error)}` 
+        });
+      });
+    }
+  }
+
+  // Final summary
+  const totalSuccessful = allResults.filter(r => r.success).length;
+  const totalFailed = allResults.filter(r => !r.success).length;
   
-  // Add failed embeddings
-  embeddingResults.filter(r => !r.success).forEach(r => {
-    allResults.push({ url: r.url, success: false, error: r.error });
-  });
+  progressTracker.currentPhase = 'All batches completed';
+  progressTracker.phaseProgress = `${totalSuccessful} successful, ${totalFailed} failed`;
+  progressTracker.completedUrls = totalSuccessful;
   
-  // Add database results (both success and failure)
-  allResults.push(...databaseResults);
+  console.log('\n📊 FINAL BATCH PROCESSING SUMMARY');
+  console.log('='.repeat(70));
+  console.log(`🎯 Total websites processed: ${urls.length}`);
+  console.log(`✅ Successfully seeded: ${totalSuccessful}/${urls.length} (${Math.round((totalSuccessful / urls.length) * 100)}%)`);
+  console.log(`❌ Failed to seed: ${totalFailed}/${urls.length} (${Math.round((totalFailed / urls.length) * 100)}%)`);
+  
+  reportProgress(progressTracker);
   
   return allResults;
 }
@@ -368,6 +489,7 @@ async function main() {
     console.error(`  Screenshots: ${SCREENSHOT_CONCURRENT_LIMIT}`);
     console.error(`  Embeddings: ${EMBEDDING_CONCURRENT_LIMIT}`);
     console.error(`  Database: ${DATABASE_CONCURRENT_LIMIT}`);
+    console.error(`  Batch size: ${BATCH_SIZE} URLs per batch`);
     process.exit(1);
   }
 
@@ -409,29 +531,35 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`🚀 Starting to process ${urls.length} URLs`);
-  console.log(`📊 Concurrency limits: Screenshots=${SCREENSHOT_CONCURRENT_LIMIT}, Embeddings=${EMBEDDING_CONCURRENT_LIMIT}, Database=${DATABASE_CONCURRENT_LIMIT}`);
+  console.log(`🚀 Starting to process ${urls.length} URLs in batches of ${BATCH_SIZE}`);
+  console.log(`📊 Batch processing config: Size=${BATCH_SIZE}, Screenshots=${SCREENSHOT_CONCURRENT_LIMIT}, Embeddings=${EMBEDDING_CONCURRENT_LIMIT}, Database=${DATABASE_CONCURRENT_LIMIT}`);
   
   const browser = await chromium.launch();
   
   try {
     const results = await processUrls(browser, urls);
     
-    // Print summary
+    // Print final detailed summary
     const successful = results.filter(r => r.success);
     const failed = results.filter(r => !r.success);
     
     console.log('\n📊 FINAL SUMMARY');
     console.log('=' .repeat(50));
-    console.log(`✅ Successfully processed: ${successful.length}/${urls.length}`);
-    console.log(`❌ Failed: ${failed.length}/${urls.length}`);
+    console.log(`🎯 Total websites processed: ${urls.length}`);
+    console.log(`✅ Successfully seeded: ${successful.length}/${urls.length} (${Math.round((successful.length / urls.length) * 100)}%)`);
+    console.log(`❌ Failed to seed: ${failed.length}/${urls.length} (${Math.round((failed.length / urls.length) * 100)}%)`);
     
-    if (failed.length > 0) {
-      console.log('\n❌ Failed URLs:');
-      failed.forEach(f => console.log(`  - ${f.url}: ${f.error}`));
+    if (successful.length > 0) {
+      console.log('\n✅ Successfully seeded websites:');
+      successful.forEach(s => console.log(`  ✓ ${s.url}`));
     }
     
-    console.log(`\n🎉 Completed processing ${urls.length} URLs`);
+    if (failed.length > 0) {
+      console.log('\n❌ Failed websites:');
+      failed.forEach(f => console.log(`  ✗ ${f.url}: ${f.error}`));
+    }
+    
+    console.log(`\n🎉 Seeding completed: ${successful.length} websites successfully added to database`);
     
   } finally {
     await browser.close();
