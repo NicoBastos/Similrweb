@@ -1,5 +1,4 @@
 "use client";
-import 'dotenv/config';
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Globe, ArrowRight, Loader2, ExternalLink, Zap } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { UsageIndicator } from "@/components/UsageIndicator";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface SimilarWebsite {
   url: string;
@@ -31,6 +32,9 @@ export default function FindPage() {
   const [results, setResults] = useState<SimilarWebsite[]>([]);
   const [error, setError] = useState("");
   const [cacheHit, setCacheHit] = useState(false);
+  const [isRateLimited, setIsRateLimited] = useState(false);
+  
+  const { refreshUsage } = useAuth();
 
   // Check cache on component mount
   useEffect(() => {
@@ -95,6 +99,7 @@ export default function FindPage() {
 
     setIsLoading(true);
     setError("");
+    setIsRateLimited(false);
     setCacheHit(false);
     
     try {
@@ -120,17 +125,29 @@ export default function FindPage() {
         body: JSON.stringify({ url: normalizedUrl }),
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        throw new Error("Failed to find similar websites");
+        if (response.status === 429) {
+          // Rate limited
+          setIsRateLimited(true);
+          setError(data.message || "Daily limit reached");
+          await refreshUsage(); // Refresh usage state
+        } else {
+          throw new Error(data.error || "Failed to find similar websites");
+        }
+        return;
       }
 
-      const data = await response.json();
       const similarWebsites = data.similar_websites || [];
       
       setResults(similarWebsites);
       
       // Cache the results for future use
       setCachedResult(normalizedUrl, similarWebsites);
+      
+      // Refresh usage count after successful request
+      await refreshUsage();
       
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -165,10 +182,7 @@ export default function FindPage() {
             <Link href="/" className="text-xl font-bold text-gradient">
               Similrweb
             </Link>
-            <Badge variant="secondary" className="text-sm">
-              <Zap className="w-4 h-4 mr-2" />
-              AI-Powered Analysis
-            </Badge>
+            <UsageIndicator />
           </div>
         </div>
       </header>
@@ -198,15 +212,15 @@ export default function FindPage() {
                       placeholder="https://example.com"
                       value={url}
                       onChange={(e: React.ChangeEvent<HTMLInputElement>) => setUrl(e.target.value)}
-                      className="pl-10 pr-4 py-3 text-lg"
+                      className="pl-12 h-12 text-lg border-primary/20 bg-card/50"
                       disabled={isLoading}
                     />
                   </div>
-                  <Button
-                    type="submit"
+                  <Button 
+                    type="submit" 
                     size="lg"
-                    disabled={!url.trim() || !isValidUrl(url.trim()) || isLoading}
-                    className="cta-gradient hover-glow text-white font-semibold px-8 py-3 group"
+                    disabled={isLoading || !url.trim() || !isValidUrl(url.trim())}
+                    className="cta-gradient hover-glow text-white font-semibold px-8 h-12 group"
                   >
                     {isLoading ? (
                       <>
@@ -223,105 +237,102 @@ export default function FindPage() {
                   </Button>
                 </div>
                 
-                {error && (
-                  <div className="text-red-400 text-sm mt-2 p-3 bg-red-400/10 rounded-lg border border-red-400/20">
-                    {error}
-                  </div>
+                {url.trim() && !isValidUrl(url.trim()) && (
+                  <p className="text-destructive text-sm">
+                    Please enter a valid URL (e.g., https://example.com)
+                  </p>
                 )}
               </form>
             </CardContent>
           </Card>
 
-          {/* Results Section */}
-          {isLoading && (
-            <div className="space-y-6">
-              <div className="text-center py-12">
-                <div className="relative w-24 h-24 mx-auto mb-6">
-                  {/* Outer rotating ring */}
-                  <div className="absolute inset-0 rounded-full border-4 border-primary/20"></div>
-                  <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-primary animate-spin"></div>
-                  
-                  {/* Inner pulsing circle */}
-                  <div className="absolute inset-4 rounded-full bg-primary/10 animate-pulse flex items-center justify-center">
-                    <Search className="w-8 h-8 text-primary animate-bounce" />
-                  </div>
-                </div>
-                
-                <h3 className="text-xl font-semibold mb-2">Analyzing Website</h3>
+          {/* Rate Limit Message */}
+          {isRateLimited && (
+            <Card className="border-destructive/20 bg-destructive/5 mb-8">
+              <CardContent className="p-6 text-center">
+                <h3 className="text-lg font-semibold text-destructive mb-2">
+                  Daily Limit Reached
+                </h3>
                 <p className="text-muted-foreground mb-4">
-                  We're capturing and analyzing the website design patterns...
+                  You&apos;ve used all your free comparisons for today. Sign up to get unlimited access!
                 </p>
-                
-                {/* Animated progress dots */}
-                <div className="flex justify-center space-x-1">
-                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                </div>
-              </div>
+                <UsageIndicator showUpgradePrompt={true} />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Error Message */}
+          {error && !isRateLimited && (
+            <Card className="border-destructive/20 bg-destructive/5 mb-8">
+              <CardContent className="p-4">
+                <p className="text-destructive text-center">{error}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Cache Hit Indicator */}
+          {cacheHit && results.length > 0 && (
+            <div className="flex justify-center mb-4">
+              <Badge variant="secondary" className="text-sm">
+                <Zap className="w-4 h-4 mr-2" />
+                Results loaded from cache
+              </Badge>
             </div>
           )}
 
+          {/* Results Section */}
           {results.length > 0 && (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold">
-                  Similar Websites
+              <div className="text-center">
+                <h2 className="text-2xl font-bold mb-2">
+                  Similar Websites Found
                 </h2>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-sm">
-                    {results.length} results found
-                  </Badge>
-                  {cacheHit && (
-                    <Badge variant="secondary" className="text-sm bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400">
-                      ⚡ Cached Result
-                    </Badge>
-                  )}
-                </div>
+                <p className="text-muted-foreground">
+                  {results.length} visually similar websites discovered
+                </p>
               </div>
-
+              
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {results.map((website, index) => (
-                  <Card key={index} className="feature-gradient border-primary/20 hover-glow group overflow-hidden">
-                    <div className="relative aspect-video bg-muted/20 overflow-hidden">
-                      <Image
-                        src={website.screenshot}
-                        alt={`Screenshot of ${website.url}`}
-                        fill
-                        className="object-cover group-hover:scale-105 transition-transform duration-300"
-                        sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-                      />
-                      {website.similarity_score && (
-                        <div className="absolute top-3 right-3">
-                          <Badge className="bg-primary/90 text-white">
-                            {Math.round(website.similarity_score * 100)}% match
+                  <Card key={index} className="group hover:shadow-lg transition-all duration-300 border-primary/10">
+                    <CardHeader className="p-0">
+                      <div className="relative aspect-video rounded-t-lg overflow-hidden bg-muted">
+                        <Image
+                          src={website.screenshot}
+                          alt={`Screenshot of ${website.title || website.url}`}
+                          fill
+                          className="object-cover transition-transform duration-300 group-hover:scale-105"
+                          sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+                        <div className="absolute bottom-3 left-3 right-3">
+                          <Badge variant="secondary" className="text-xs">
+                            {website.similarity_score ? `${Math.round(website.similarity_score * 100)}% similar` : 'Match found'}
                           </Badge>
                         </div>
-                      )}
-                    </div>
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-lg truncate">
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-4">
+                      <CardTitle className="text-lg mb-2 line-clamp-1">
                         {website.title || new URL(website.url).hostname}
                       </CardTitle>
-                      <CardDescription className="text-sm text-muted-foreground truncate">
+                      <CardDescription className="text-sm mb-3 line-clamp-2">
                         {website.url}
                       </CardDescription>
-                    </CardHeader>
-                    <CardContent className="pt-0">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full group/button"
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="w-full group/btn"
                         asChild
                       >
-                        <a
-                          href={website.url}
-                          target="_blank"
+                        <a 
+                          href={website.url} 
+                          target="_blank" 
                           rel="noopener noreferrer"
                           className="flex items-center justify-center"
                         >
                           Visit Website
-                          <ExternalLink className="w-4 h-4 ml-2 group-hover/button:translate-x-1 transition-transform" />
+                          <ExternalLink className="w-4 h-4 ml-2 group-hover/btn:translate-x-1 transition-transform" />
                         </a>
                       </Button>
                     </CardContent>
@@ -331,17 +342,16 @@ export default function FindPage() {
             </div>
           )}
 
-          {/* Empty State */}
-          {!isLoading && results.length === 0 && !error && (
-            <div className="text-center py-12">
-              <div className="w-20 h-20 bg-muted/20 rounded-full flex items-center justify-center mx-auto mb-6">
-                <Search className="w-10 h-10 text-muted-foreground" />
-              </div>
-              <h3 className="text-xl font-semibold mb-2">Ready to Explore</h3>
-              <p className="text-muted-foreground">
-                Enter a website URL above to find visually similar websites and analyze design patterns.
-              </p>
-            </div>
+          {/* No Results */}
+          {!isLoading && !error && results.length === 0 && url.trim() && (
+            <Card className="border-primary/20 bg-card/50">
+              <CardContent className="p-8 text-center">
+                <h3 className="text-xl font-semibold mb-2">No Similar Websites Found</h3>
+                <p className="text-muted-foreground">
+                  We couldn&apos;t find any visually similar websites in our database. Try a different URL or check back later as we add more websites.
+                </p>
+              </CardContent>
+            </Card>
           )}
         </div>
       </main>

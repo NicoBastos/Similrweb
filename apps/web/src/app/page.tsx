@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Eye, Zap, Target, ArrowRight, Search, BarChart3, CheckCircle, Github, Mail, Globe } from "lucide-react";
 import Link from "next/link";
+import { UsageIndicator } from "@/components/UsageIndicator";
 
 export default function Home() {
   return (
@@ -10,6 +11,19 @@ export default function Home() {
       {/* Hero Section */}
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-secondary/10" />
+        
+        {/* Header */}
+        <header className="relative border-b border-border/50 bg-card/20">
+          <div className="container mx-auto px-4 py-4">
+            <div className="flex items-center justify-between">
+              <Link href="/" className="text-xl font-bold text-gradient">
+                Similrweb
+              </Link>
+              <UsageIndicator />
+            </div>
+          </div>
+        </header>
+        
         <div className="relative container mx-auto px-4 py-20 sm:py-32">
           <div className="text-center space-y-8">
             <Badge variant="secondary" className="text-sm font-medium">
@@ -168,15 +182,15 @@ export default function Home() {
             <p className="text-lg text-white/70 max-w-2xl mx-auto">
               Join thousands of designers and developers who use Similrweb to analyze and improve their web designs.
             </p>
-            <Button 
-              size="lg" 
-              className="cta-gradient hover-glow text-white font-semibold px-10 py-4 rounded-full text-lg group"
-            >
-              <Link href="/find" className="flex items-center">
+            <Link href="/find">
+              <Button 
+                size="lg" 
+                className="cta-gradient hover-glow text-white font-semibold px-10 py-4 rounded-full text-lg group"
+              >
                 Get Started for Free
                 <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
-              </Link>
-            </Button>
+              </Button>
+            </Link>
           </div>
         </div>
       </section>

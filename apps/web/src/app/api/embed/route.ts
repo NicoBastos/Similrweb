@@ -20,6 +20,8 @@ interface CachedEmbedResult {
   expiresAt: number;
 }
 
+type EmbedResultData = CachedEmbedResult['data'];
+
 // In-memory cache for embed results (expires after 60 minutes since these are expensive)
 const embedCache = new Map<string, CachedEmbedResult>();
 const EMBED_CACHE_DURATION = 60 * 60 * 1000; // 60 minutes
@@ -46,7 +48,7 @@ function getEmbedCacheKey(url: string): string {
   return createHash('sha256').update(url.toLowerCase().trim()).digest('hex');
 }
 
-function getCachedEmbedResult(cacheKey: string): any | null {
+function getCachedEmbedResult(cacheKey: string): EmbedResultData | null {
   const cached = embedCache.get(cacheKey);
   if (!cached) return null;
   
@@ -58,7 +60,7 @@ function getCachedEmbedResult(cacheKey: string): any | null {
   return cached.data;
 }
 
-function setCachedEmbedResult(cacheKey: string, data: any): void {
+function setCachedEmbedResult(cacheKey: string, data: EmbedResultData): void {
   embedCache.set(cacheKey, {
     data,
     timestamp: Date.now(),
@@ -140,7 +142,7 @@ async function takeScreenshot(browser: Browser, url: string): Promise<{ success:
       });
       await page.waitForTimeout(200);
 
-    } catch (err) {
+    } catch {
       console.log('⚠️ Some interactive elements failed for', new URL(url).hostname, '- continuing with screenshot');
     }
     
@@ -153,8 +155,8 @@ async function takeScreenshot(browser: Browser, url: string): Promise<{ success:
     console.log('✅ Screenshot completed for', new URL(url).hostname);
     return { success: true, buffer };
     
-  } catch (err) { 
-    const errorMsg = err instanceof Error ? err.message : String(err);
+  } catch (error) { 
+    const errorMsg = error instanceof Error ? error.message : String(error);
     console.error('❌ Screenshot failed for', url, ':', errorMsg);
     return { success: false, error: errorMsg };
   } finally {

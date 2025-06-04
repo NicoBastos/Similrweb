@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@website-similarity/db";
-import { createHash } from "node:crypto";
-
-interface SimilarWebsite {
-  id: number;
-  url: string;
-  screenshot_url: string;
-  similarity: number;
-  created_at: string;
-}
+import { createHash } from "crypto";
+import { cookies } from "next/headers";
+import {
+  getSessionFromCookie,
+  createNewSession,
+  shouldResetSession,
+  resetSessionForNewDay,
+  incrementSessionUsage,
+  hasReachedLimit,
+  SESSION_COOKIE_NAME
+} from "@/lib/session";
 
 interface CachedApiResult {
-  data: any;
+  data: unknown;
   timestamp: number;
   expiresAt: number;
 }
@@ -42,7 +44,7 @@ function getCacheKey(url: string): string {
   return createHash('sha256').update(url.toLowerCase()).digest('hex');
 }
 
-function getCachedResult(cacheKey: string): any | null {
+function getCachedResult(cacheKey: string): unknown | null {
   const cached = apiCache.get(cacheKey);
   if (!cached) return null;
   
@@ -54,7 +56,7 @@ function getCachedResult(cacheKey: string): any | null {
   return cached.data;
 }
 
-function setCachedResult(cacheKey: string, data: any): void {
+function setCachedResult(cacheKey: string, data: unknown): void {
   apiCache.set(cacheKey, {
     data,
     timestamp: Date.now(),
@@ -64,7 +66,7 @@ function setCachedResult(cacheKey: string, data: any): void {
 
 export async function POST(request: NextRequest) {
   try {
-    const { url } = await request.json();
+    const { url } = await request.json() as { url?: string };
 
     if (!url) {
       return NextResponse.json(
@@ -83,19 +85,76 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Handle usage tracking for anonymous users
+    // TODO: Add authenticated user handling later
+    await cookies();
+    
+    // Get or create session
+    let session = await getSessionFromCookie();
+    if (!session) {
+      session = createNewSession();
+    }
+    
+    // Reset session if it's a new day
+    if (shouldResetSession(session)) {
+      session = resetSessionForNewDay(session);
+    }
+    
+    // Check if user has reached limit
+    if (hasReachedLimit(session)) {
+      const response = NextResponse.json(
+        { 
+          error: "Daily limit reached", 
+          message: "You've reached your daily limit of free comparisons. Sign up for unlimited access!",
+          limit_info: {
+            comparisons_used: session.comparisons_used,
+            daily_limit: session.daily_limit,
+            reset_date: session.reset_date
+          }
+        },
+        { status: 429 }
+      );
+      
+      // Update cookie even for rate limited requests
+      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
+        path: '/'
+      });
+      
+      return response;
+    }
+
     // Check server-side cache first
     const cacheKey = getCacheKey(url);
     const cachedResult = getCachedResult(cacheKey);
     
     if (cachedResult) {
       console.log('🎯 Server cache hit for:', url);
-      return NextResponse.json(cachedResult, {
+      
+      // Still increment usage even for cached results
+      session = incrementSessionUsage(session);
+      
+      const response = NextResponse.json(cachedResult, {
         headers: {
           'Cache-Control': 'public, max-age=900, s-maxage=1800', // 15 min browser, 30 min CDN
           'X-Cache': 'HIT',
           'X-Cache-Key': cacheKey.substring(0, 8) + '...'
         }
       });
+      
+      // Update session cookie
+      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
+        path: '/'
+      });
+      
+      return response;
     }
 
     console.log('🔍 Finding similar websites for:', url);
@@ -109,7 +168,7 @@ export async function POST(request: NextRequest) {
     });
 
     if (!embedResponse.ok) {
-      const embedError = await embedResponse.json();
+      const embedError = await embedResponse.json() as { details?: string; error?: string };
       console.error('❌ Embed endpoint failed:', embedError);
       return NextResponse.json(
         { 
@@ -120,7 +179,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const embedResult = await embedResponse.json();
+    const embedResult = await embedResponse.json() as { embedding?: number[] };
     const queryEmbedding = embedResult.embedding;
 
     if (!queryEmbedding || !Array.isArray(queryEmbedding)) {
@@ -155,6 +214,10 @@ export async function POST(request: NextRequest) {
 
     if (!similarWebsites || similarWebsites.length === 0) {
       console.log('📭 No similar websites found');
+      
+      // Increment usage even for empty results
+      session = incrementSessionUsage(session);
+      
       const emptyResult = {
         similar_websites: [],
         query_url: url,
@@ -169,17 +232,34 @@ export async function POST(request: NextRequest) {
         expiresAt: Date.now() + (5 * 60 * 1000)
       });
       
-      return NextResponse.json(emptyResult, {
+      const response = NextResponse.json(emptyResult, {
         headers: {
           'Cache-Control': 'public, max-age=300, s-maxage=600', // 5 min browser, 10 min CDN
           'X-Cache': 'MISS',
           'X-Cache-Key': cacheKey.substring(0, 8) + '...'
         }
       });
+      
+      // Update session cookie
+      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
+        path: '/'
+      });
+      
+      return response;
     }
 
     // Step 3: Transform results to match expected format
-    const transformedResults = similarWebsites.map((website: SimilarWebsite) => ({
+    const transformedResults = similarWebsites.map((website: {
+      url: string;
+      screenshot_url: string;
+      similarity: number;
+      id: number;
+      created_at: string;
+    }) => ({
       url: website.url,
       screenshot: website.screenshot_url,
       title: new URL(website.url).hostname, // Generate title from hostname
@@ -189,6 +269,9 @@ export async function POST(request: NextRequest) {
     }));
 
     console.log(`✅ Found ${transformedResults.length} similar websites`);
+
+    // Increment usage for successful request
+    session = incrementSessionUsage(session);
 
     const result = {
       similar_websites: transformedResults,
@@ -201,45 +284,40 @@ export async function POST(request: NextRequest) {
     // Cache the successful result
     setCachedResult(cacheKey, result);
 
-    return NextResponse.json(result, {
+    const response = NextResponse.json(result, {
       headers: {
         'Cache-Control': 'public, max-age=900, s-maxage=1800', // 15 min browser, 30 min CDN
         'X-Cache': 'MISS',
-        'X-Cache-Key': cacheKey.substring(0, 8) + '...',
-        'X-Cache-Size': apiCache.size.toString()
+        'X-Cache-Key': cacheKey.substring(0, 8) + '...'
       }
     });
+    
+    // Update session cookie with incremented usage
+    response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+      path: '/'
+    });
+
+    return response;
 
   } catch (error) {
-    console.error("❌ Error in find-similar API:", error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
+    console.error('❌ Find similar API error:', error);
     return NextResponse.json(
       { 
         error: "Internal server error",
-        details: errorMessage
+        details: error instanceof Error ? error.message : "Unknown error"
       },
       { status: 500 }
     );
   }
 }
 
-// Add GET endpoint for cache statistics
 export async function GET() {
-  const cacheStats = {
-    cache_size: apiCache.size,
-    cache_keys: Array.from(apiCache.keys()).map(key => ({
-      key: key.substring(0, 8) + '...',
-      timestamp: apiCache.get(key)?.timestamp,
-      expires_in_ms: Math.max(0, (apiCache.get(key)?.expiresAt || 0) - Date.now())
-    })),
-    cache_duration_ms: CACHE_DURATION,
-    timestamp: new Date().toISOString()
-  };
-  
-  return NextResponse.json(cacheStats, {
-    headers: {
-      'Cache-Control': 'no-cache'
-    }
-  });
+  return NextResponse.json(
+    { message: "Find Similar API - Use POST method with URL parameter" },
+    { status: 200 }
+  );
 } 
