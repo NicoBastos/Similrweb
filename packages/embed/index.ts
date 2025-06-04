@@ -11,6 +11,11 @@ import pLimit from 'p-limit';
  *─────────────────────────────*/
 const limit = pLimit(3);               // only 3 parallel calls for resource management
 
+// Environment-aware Python path
+const pythonPath = process.env.NODE_ENV === 'production' 
+  ? 'python3'  // Use system Python in production
+  : '.venv/bin/python';  // Use venv in development
+
 /*─────────────────────────────*
  * 2. Simple in-process cache  *
  *   key = SHA-256(imageBytes) *
@@ -28,7 +33,7 @@ function hash(buf: Buffer) {
 /** Call Python CLIP script to embed image */
 async function runClipEmbedding(buffer: Buffer): Promise<number[]> {
   return new Promise((resolve, reject) => {
-    const python = spawn('.venv/bin/python', ['-c', CLIP_SCRIPT], {
+    const python = spawn(pythonPath, ['-c', CLIP_SCRIPT], {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd: process.cwd()
     });
@@ -118,6 +123,23 @@ export async function embedImage(buffer: Buffer | Uint8Array): Promise<number[]>
 
   cache.set(key, vector);
   return vector;
+}
+
+/** Health check function to test if CLIP embedding is working */
+export async function checkHealth(): Promise<boolean> {
+  try {
+    // Create a minimal 1x1 pixel PNG image as base64
+    const dummyImageBuffer = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'
+    );
+    
+    await embedImage(dummyImageBuffer);
+    return true;
+  } catch (error) {
+    console.error('Health check failed:', error);
+    return false;
+  }
 }
 
 /*─────────────────────────────*
