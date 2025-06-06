@@ -39,6 +39,12 @@ interface ProcessResult {
   error?: string;
 }
 
+interface DomainCheckResult {
+  url: string;
+  isParked: boolean;
+  reason?: string;
+}
+
 interface ProgressTracker {
   totalUrls: number;
   completedUrls: number;
@@ -54,6 +60,402 @@ function reportProgress(tracker: ProgressTracker) {
   console.log(`🔄 Current: ${tracker.currentPhase} ${tracker.phaseProgress}`);
 }
 
+async function checkIfParkedDomain(browser: Browser, url: string): Promise<DomainCheckResult> {
+  let page: Page | null = null;
+  
+  try {
+    console.log('🔍 Checking if domain is parked:', new URL(url).hostname);
+    page = await browser.newPage({ 
+      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT } 
+    });
+    
+    // Set a shorter timeout for parked domain detection
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+    
+    // Get page content for analysis
+    const content = await page.evaluate(() => {
+      return {
+        title: document.title || '',
+        bodyText: document.body?.innerText || '',
+        htmlContent: document.documentElement.innerHTML || '',
+        metaDescription: document.querySelector('meta[name="description"]')?.getAttribute('content') || '',
+        headText: document.head?.innerText || ''
+      };
+    });
+    
+    // Common parked domain indicators
+    const parkedIndicators = [
+      // Generic parking messages
+      'this domain is for sale',
+      'domain for sale',
+      'buy this domain',
+      'purchase this domain',
+      'domain parking',
+      'parked domain',
+      'domain is parked',
+      'coming soon',
+      'under construction',
+      'website coming soon',
+      'site under construction',
+      
+      // Parking service providers
+      'godaddy.com',
+      'namecheap.com',
+      'parkingcrew',
+      'sedoparking',
+      'skenzo',
+      'domain.com',
+      'hugedomains',
+      'afternic',
+      'dan.com',
+      'flippa.com',
+      'undeveloped.com',
+      'above.com',
+      'buydomains.com',
+      
+      // Generic placeholder content
+      'default web site page',
+      'default page',
+      'placeholder page',
+      'temporary page',
+      'maintenance mode',
+      'site temporarily unavailable',
+      'website under maintenance',
+      
+      // Common parking page titles
+      'welcome to nginx',
+      'apache http server test page',
+      'iis windows server',
+      'default backend - 404'
+    ];
+    
+    const combinedText = `${content.title} ${content.bodyText} ${content.metaDescription} ${content.headText}`.toLowerCase();
+    const htmlLower = content.htmlContent.toLowerCase();
+    
+    // Check for parked domain indicators
+    for (const indicator of parkedIndicators) {
+      if (combinedText.includes(indicator.toLowerCase()) || htmlLower.includes(indicator.toLowerCase())) {
+        return {
+          url,
+          isParked: true,
+          reason: `Contains parked domain indicator: "${indicator}"`
+        };
+      }
+    }
+    
+    // Check for minimal content (likely placeholder)
+    const textContent = content.bodyText.trim();
+    const wordCount = textContent.split(/\s+/).filter(word => word.length > 2).length;
+    
+    if (wordCount < 20) {
+      return {
+        url,
+        isParked: true,
+        reason: `Minimal content detected (${wordCount} meaningful words)`
+      };
+    }
+    
+    // Check for common parking page patterns in HTML structure
+    const parkingPatterns = [
+      'parking-lander',
+      'domain-parking',
+      'parked-domain',
+      'for-sale-lander',
+      'parking-page',
+      'domain-for-sale'
+    ];
+    
+    for (const pattern of parkingPatterns) {
+      if (htmlLower.includes(pattern)) {
+        return {
+          url,
+          isParked: true,
+          reason: `HTML contains parking pattern: "${pattern}"`
+        };
+      }
+    }
+    
+    // Check if page redirects to a parking service
+    const finalUrl = page.url();
+    const parkingDomains = [
+      'parkingcrew.net',
+      'sedoparking.com',
+      'skenzo.com',
+      'above.com',
+      'hugedomains.com',
+      'dan.com',
+      'afternic.com'
+    ];
+    
+    for (const parkingDomain of parkingDomains) {
+      if (finalUrl.includes(parkingDomain)) {
+        return {
+          url,
+          isParked: true,
+          reason: `Redirected to parking service: ${parkingDomain}`
+        };
+      }
+    }
+    
+    console.log('✅ Domain appears to be legitimate:', new URL(url).hostname);
+    return { url, isParked: false };
+    
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.log('⚠️ Could not check domain status for', url, '- assuming legitimate:', errorMsg);
+    // If we can't check, assume it's legitimate to avoid false positives
+    return { url, isParked: false };
+  } finally {
+    if (page) {
+      await page.close().catch(() => {}); // Ignore close errors
+    }
+  }
+}
+
+async function dismissModalsAndPopups(page: Page): Promise<void> {
+  try {
+    // Strategy 1: Try ESC key first (works for many modals)
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    
+    // Strategy 2: Comprehensive selector-based dismissal (multiple passes)
+    const modalDismissalPasses = 3; // Try multiple times for nested modals
+    
+    for (let pass = 1; pass <= modalDismissalPasses; pass++) {
+      console.log(`🔧 Modal dismissal pass ${pass}/${modalDismissalPasses}`);
+      
+      // Check if there are visible modal overlays first
+      const hasModals = await page.evaluate(() => {
+        // Look for common modal indicators
+        const modalSelectors = [
+          '[role="dialog"]',
+          '[role="modal"]',
+          '.modal',
+          '.popup',
+          '.overlay',
+          '.lightbox',
+          '[data-modal]',
+          '[aria-modal="true"]'
+        ];
+        
+        return modalSelectors.some(selector => {
+          const elements = document.querySelectorAll(selector);
+          return Array.from(elements).some(el => {
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' && 
+                   style.visibility !== 'hidden' && 
+                   style.opacity !== '0';
+          });
+        });
+      });
+      
+      if (!hasModals && pass > 1) {
+        console.log('✅ No more visible modals detected');
+        break;
+      }
+      
+      // Comprehensive list of close button selectors
+      const closeSelectors = [
+        // Cookie banners
+        '.cookie-banner button:not([class*="accept"]):not([class*="allow"])',
+        '.cookie-notice button:not([class*="accept"]):not([class*="allow"])',
+        '.gdpr-banner button:not([class*="accept"]):not([class*="allow"])',
+        '[data-cookie-banner] button:not([class*="accept"]):not([class*="allow"])',
+        'button[class*="cookie"]:not([class*="accept"]):not([class*="allow"])',
+        '.consent-banner button:not([class*="accept"]):not([class*="allow"])',
+        
+        // Generic close buttons
+        'button[aria-label*="close" i]',
+        'button[aria-label*="dismiss" i]',
+        'button[aria-label*="cancel" i]',
+        'button[title*="close" i]',
+        'button[title*="dismiss" i]',
+        
+        // Modal close buttons
+        '.modal-close',
+        '.popup-close',
+        '.dialog-close',
+        '.overlay-close',
+        '.lightbox-close',
+        '[data-dismiss="modal"]',
+        '[data-close="modal"]',
+        '[data-modal-close]',
+        
+        // X buttons and icons
+        'button[class*="close"]',
+        '.close-button',
+        '.btn-close',
+        '.close-btn',
+        'button.close',
+        '[role="button"][aria-label*="close" i]',
+        
+        // Test ID selectors
+        '[data-testid*="close"]',
+        '[data-testid*="dismiss"]',
+        '[data-testid*="modal-close"]',
+        '[data-cy*="close"]',
+        
+        // Newsletter/subscription popups
+        '.newsletter-popup button:not([class*="subscribe"]):not([class*="sign"])',
+        '.email-popup button:not([class*="subscribe"]):not([class*="sign"])',
+        '.subscription-modal button:not([class*="subscribe"]):not([class*="sign"])',
+        
+        // Age verification, location, etc.
+        '.age-verification button:not([class*="confirm"]):not([class*="yes"])',
+        '.location-popup button:not([class*="allow"]):not([class*="enable"])',
+        
+        // Generic overlays
+        '.overlay button[class*="close"]',
+        '.backdrop button[class*="close"]',
+        '.modal-backdrop button',
+        
+        // SVG close icons (often used in modern designs)
+        'button svg[class*="close"]',
+        'button svg[class*="x"]',
+        '[role="button"] svg[class*="close"]',
+        
+        // Specific patterns for common frameworks
+        '.MuiDialog-root button[aria-label*="close" i]',
+        '.ant-modal-close',
+        '.el-dialog__close',
+        '.v-dialog button[class*="close"]'
+      ];
+      
+      // Alternative selectors (buttons that might close modals but aren't clearly labeled)
+      const alternativeSelectors = [
+        // Buttons containing "No thanks", "Maybe later", "Skip", etc.
+        'button:has-text("No thanks")',
+        'button:has-text("Maybe later")',
+        'button:has-text("Skip")',
+        'button:has-text("Not now")',
+        'button:has-text("Decline")',
+        'button:has-text("Reject")',
+        'button:has-text("Dismiss")',
+        'button:has-text("Continue without")',
+        'button:has-text("×")',
+        'button:has-text("✕")',
+        'button:has-text("✖")'
+      ];
+      
+      let dismissed = false;
+      
+      // Try primary close selectors
+      for (const selector of closeSelectors) {
+        try {
+          const elements = await page.$$(selector);
+          for (const element of elements) {
+            const isVisible = await element.isVisible();
+            if (isVisible) {
+              await element.click();
+              await page.waitForTimeout(200);
+              dismissed = true;
+              console.log(`✅ Dismissed modal using selector: ${selector}`);
+              break;
+            }
+          }
+          if (dismissed) break;
+        } catch (error) {
+          // Continue to next selector
+        }
+      }
+      
+      // If no primary selector worked, try alternative approaches
+      if (!dismissed) {
+        // Try alternative text-based selectors
+        for (const selector of alternativeSelectors) {
+          try {
+            const element = await page.$(selector);
+            if (element && await element.isVisible()) {
+              await element.click();
+              await page.waitForTimeout(200);
+              dismissed = true;
+              console.log(`✅ Dismissed modal using alternative selector: ${selector}`);
+              break;
+            }
+          } catch (error) {
+            // Continue to next selector
+          }
+        }
+      }
+      
+      // Strategy 3: Click outside modal area (click on backdrop)
+      if (!dismissed) {
+        try {
+          const backdrop = await page.$('.modal-backdrop, .overlay, .backdrop, [data-backdrop]');
+          if (backdrop && await backdrop.isVisible()) {
+            await backdrop.click();
+            await page.waitForTimeout(200);
+            dismissed = true;
+            console.log('✅ Dismissed modal by clicking backdrop');
+          }
+        } catch (error) {
+          // Ignore backdrop click errors
+        }
+      }
+      
+      // Strategy 4: Try ESC key again
+      if (!dismissed) {
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(200);
+        console.log('🔧 Tried ESC key dismissal');
+      }
+      
+      // Wait a bit between passes
+      if (pass < modalDismissalPasses) {
+        await page.waitForTimeout(300);
+      }
+    }
+    
+    // Strategy 5: Final comprehensive check and forced dismissal
+    await page.evaluate(() => {
+      // Force hide common modal patterns using CSS
+      const modalPatterns = [
+        '[role="dialog"]',
+        '[role="modal"]',
+        '.modal',
+        '.popup',
+        '.overlay:not(.leaflet-overlay-pane)', // Exclude map overlays
+        '.lightbox',
+        '.cookie-banner',
+        '.gdpr-banner',
+        '.consent-banner',
+        '.newsletter-popup',
+        '.email-popup',
+        '.subscription-modal',
+        '[data-modal]',
+        '[aria-modal="true"]'
+      ];
+      
+      modalPatterns.forEach(pattern => {
+        const elements = document.querySelectorAll(pattern);
+        elements.forEach(el => {
+          const style = window.getComputedStyle(el);
+          // Only hide if it looks like a modal (positioned, high z-index, etc.)
+          if (style.position === 'fixed' || style.position === 'absolute') {
+            const zIndex = parseInt(style.zIndex);
+            if (zIndex > 100 || style.backgroundColor.includes('rgba')) {
+              (el as HTMLElement).style.display = 'none';
+            }
+          }
+        });
+      });
+      
+      // Also try to remove backdrop/overlay elements
+      const backdropElements = document.querySelectorAll('.modal-backdrop, .backdrop, [data-backdrop]');
+      backdropElements.forEach(el => {
+        (el as HTMLElement).style.display = 'none';
+      });
+    });
+    
+    // Final wait for any animations to complete
+    await page.waitForTimeout(500);
+    console.log('✅ Modal dismissal completed');
+    
+  } catch (error) {
+    console.log('⚠️ Some modals might not have been dismissed:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function takeScreenshot(browser: Browser, url: string): Promise<ScreenshotResult> {
   let page: Page | null = null;
   
@@ -67,30 +469,9 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
     
     // Simulate real user behavior to reveal more content
     try {
-      // 1. Dismiss common popups/overlays
-      const commonDismissSelectors = [
-        '[aria-label*="close"]',
-        '[aria-label*="dismiss"]', 
-        '.cookie-banner button',
-        '.modal-close',
-        '.popup-close',
-        '[data-testid*="close"]',
-        '.close-button',
-        'button[aria-label="Close"]'
-      ];
-      
-      for (const selector of commonDismissSelectors) {
-        try {
-          const element = await page.$(selector);
-          if (element) {
-            await element.click();
-            await page.waitForTimeout(200); // Reduced from 500
-            break; // Only dismiss one popup
-          }
-        } catch {
-          // Ignore errors, continue to next selector
-        }
-      }
+      // 1. Comprehensive modal and popup dismissal
+      console.log('🔧 Dismissing modals and popups for', new URL(url).hostname);
+      await dismissModalsAndPopups(page);
 
       // 2. Scroll to trigger lazy loading and scroll animations
       console.log('🔄 Scrolling to reveal lazy-loaded content for', new URL(url).hostname);
@@ -283,10 +664,36 @@ async function processBatchPipeline(
   console.log(`\n🎯 BATCH ${batchNumber}/${totalBatches}: Processing ${urls.length} URLs`);
   console.log('='.repeat(70));
   
-  // Phase 1: Screenshots for this batch
-  console.log(`\n📷 BATCH ${batchNumber}: Taking screenshots`);
-  const screenshotResults = await processConcurrentBatch(
+  // Phase 0: Check for parked domains first
+  console.log(`\n🔍 BATCH ${batchNumber}: Checking for parked domains`);
+  const domainCheckResults = await processConcurrentBatch(
     urls,
+    (url) => checkIfParkedDomain(browser, url),
+    SCREENSHOT_CONCURRENT_LIMIT, // Use same concurrency as screenshots
+    `Batch ${batchNumber} Domain Check`,
+    progressTracker
+  );
+
+  const legitimateUrls = domainCheckResults.filter(r => !r.isParked).map(r => r.url);
+  const parkedDomains = domainCheckResults.filter(r => r.isParked);
+  
+  console.log(`✅ Batch ${batchNumber} domain check: ${legitimateUrls.length}/${urls.length} legitimate websites found`);
+  
+  // Add parked domains to results as skipped
+  parkedDomains.forEach(r => {
+    console.log(`🚫 Skipping parked domain: ${r.url} (${r.reason})`);
+    batchResults.push({ url: r.url, success: false, error: `Parked domain: ${r.reason}` });
+  });
+
+  if (legitimateUrls.length === 0) {
+    console.log(`❌ Batch ${batchNumber}: No legitimate websites found, skipping remaining phases`);
+    return batchResults;
+  }
+
+  // Phase 1: Screenshots for legitimate URLs only
+  console.log(`\n📷 BATCH ${batchNumber}: Taking screenshots of ${legitimateUrls.length} legitimate websites`);
+  const screenshotResults = await processConcurrentBatch(
+    legitimateUrls,
     (url) => takeScreenshot(browser, url),
     SCREENSHOT_CONCURRENT_LIMIT,
     `Batch ${batchNumber} Screenshots`,
@@ -296,7 +703,7 @@ async function processBatchPipeline(
   const successfulScreenshots = screenshotResults.filter(r => r.success);
   const failedScreenshots = screenshotResults.filter(r => !r.success);
   
-  console.log(`✅ Batch ${batchNumber} screenshots: ${successfulScreenshots.length}/${urls.length} successful`);
+  console.log(`✅ Batch ${batchNumber} screenshots: ${successfulScreenshots.length}/${legitimateUrls.length} successful`);
   
   // Add failed screenshots to results
   failedScreenshots.forEach(r => {
@@ -415,16 +822,19 @@ async function processUrls(browser: Browser, urls: string[]): Promise<ProcessRes
   // Final summary
   const totalSuccessful = allResults.filter(r => r.success).length;
   const totalFailed = allResults.filter(r => !r.success).length;
+  const parkedDomains = allResults.filter(r => !r.success && r.error?.includes('Parked domain')).length;
+  const actualFailures = totalFailed - parkedDomains;
   
   progressTracker.currentPhase = 'All batches completed';
-  progressTracker.phaseProgress = `${totalSuccessful} successful, ${totalFailed} failed`;
+  progressTracker.phaseProgress = `${totalSuccessful} successful, ${parkedDomains} parked, ${actualFailures} failed`;
   progressTracker.completedUrls = totalSuccessful;
   
   console.log('\n📊 FINAL BATCH PROCESSING SUMMARY');
   console.log('='.repeat(70));
   console.log(`🎯 Total websites processed: ${urls.length}`);
   console.log(`✅ Successfully seeded: ${totalSuccessful}/${urls.length} (${Math.round((totalSuccessful / urls.length) * 100)}%)`);
-  console.log(`❌ Failed to seed: ${totalFailed}/${urls.length} (${Math.round((totalFailed / urls.length) * 100)}%)`);
+  console.log(`🚫 Parked domains skipped: ${parkedDomains}/${urls.length} (${Math.round((parkedDomains / urls.length) * 100)}%)`);
+  console.log(`❌ Failed to seed: ${actualFailures}/${urls.length} (${Math.round((actualFailures / urls.length) * 100)}%)`);
   
   reportProgress(progressTracker);
   
@@ -541,22 +951,29 @@ async function main() {
     
     // Print final detailed summary
     const successful = results.filter(r => r.success);
-    const failed = results.filter(r => !r.success);
+    const parked = results.filter(r => !r.success && r.error?.includes('Parked domain'));
+    const actuallyFailed = results.filter(r => !r.success && !r.error?.includes('Parked domain'));
     
     console.log('\n📊 FINAL SUMMARY');
     console.log('=' .repeat(50));
     console.log(`🎯 Total websites processed: ${urls.length}`);
     console.log(`✅ Successfully seeded: ${successful.length}/${urls.length} (${Math.round((successful.length / urls.length) * 100)}%)`);
-    console.log(`❌ Failed to seed: ${failed.length}/${urls.length} (${Math.round((failed.length / urls.length) * 100)}%)`);
+    console.log(`🚫 Parked domains skipped: ${parked.length}/${urls.length} (${Math.round((parked.length / urls.length) * 100)}%)`);
+    console.log(`❌ Failed to seed: ${actuallyFailed.length}/${urls.length} (${Math.round((actuallyFailed.length / urls.length) * 100)}%)`);
     
     if (successful.length > 0) {
       console.log('\n✅ Successfully seeded websites:');
       successful.forEach(s => console.log(`  ✓ ${s.url}`));
     }
     
-    if (failed.length > 0) {
+    if (parked.length > 0) {
+      console.log('\n🚫 Parked domains (skipped):');
+      parked.forEach(p => console.log(`  🚫 ${p.url}: ${p.error}`));
+    }
+    
+    if (actuallyFailed.length > 0) {
       console.log('\n❌ Failed websites:');
-      failed.forEach(f => console.log(`  ✗ ${f.url}: ${f.error}`));
+      actuallyFailed.forEach(f => console.log(`  ✗ ${f.url}: ${f.error}`));
     }
     
     console.log(`\n🎉 Seeding completed: ${successful.length} websites successfully added to database`);
