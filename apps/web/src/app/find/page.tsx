@@ -9,16 +9,21 @@ import Image from "next/image";
 import Link from "next/link";
 import { UsageIndicator } from "@/components/UsageIndicator";
 import { useAuth } from "@/contexts/AuthContext";
+import { ProgressSteps } from "@/components/ProgressSteps";
 
 interface SimilarWebsite {
   url: string;
   screenshot: string;
   title?: string;
   similarity_score?: number;
+  id?: number;
+  created_at?: string;
+  is_original?: boolean;
 }
 
 interface CachedResult {
   results: SimilarWebsite[];
+  original: SimilarWebsite | null;
   timestamp: number;
   expiresAt: number;
 }
@@ -30,9 +35,12 @@ export default function FindPage() {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState<SimilarWebsite[]>([]);
+  const [originalWebsite, setOriginalWebsite] = useState<SimilarWebsite | null>(null);
   const [error, setError] = useState("");
   const [cacheHit, setCacheHit] = useState(false);
   const [isRateLimited, setIsRateLimited] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
+  const [currentUrl, setCurrentUrl] = useState("");
   
   const { refreshUsage } = useAuth();
 
@@ -59,7 +67,7 @@ export default function FindPage() {
     });
   };
 
-  const getCachedResult = (normalizedUrl: string): SimilarWebsite[] | null => {
+  const getCachedResult = (normalizedUrl: string): { results: SimilarWebsite[]; original: SimilarWebsite | null } | null => {
     try {
       const cacheKey = getCacheKey(normalizedUrl);
       const cached = localStorage.getItem(cacheKey);
@@ -73,17 +81,18 @@ export default function FindPage() {
         return null;
       }
 
-      return cachedResult.results;
+      return { results: cachedResult.results, original: cachedResult.original };
     } catch {
       return null;
     }
   };
 
-  const setCachedResult = (normalizedUrl: string, results: SimilarWebsite[]) => {
+  const setCachedResult = (normalizedUrl: string, results: SimilarWebsite[], original: SimilarWebsite | null) => {
     try {
       const cacheKey = getCacheKey(normalizedUrl);
       const cachedResult: CachedResult = {
         results,
+        original,
         timestamp: Date.now(),
         expiresAt: Date.now() + CACHE_DURATION
       };
@@ -101,21 +110,27 @@ export default function FindPage() {
     setError("");
     setIsRateLimited(false);
     setCacheHit(false);
+    setShowProgress(false);
     
     try {
       const normalizedUrl = normalizeUrl(url.trim());
+      setCurrentUrl(normalizedUrl);
       
       // Check cache first
-      const cachedResults = getCachedResult(normalizedUrl);
-      if (cachedResults) {
+      const cachedData = getCachedResult(normalizedUrl);
+      if (cachedData) {
         console.log('🎯 Cache hit for:', normalizedUrl);
-        setResults(cachedResults);
+        setResults(cachedData.results);
+        setOriginalWebsite(cachedData.original);
         setCacheHit(true);
         setIsLoading(false);
         return;
       }
 
       console.log('🔍 Cache miss, fetching from API for:', normalizedUrl);
+      
+      // Show progress steps for new requests
+      setShowProgress(true);
       
       const response = await fetch("/api/find-similar", {
         method: "POST",
@@ -140,11 +155,26 @@ export default function FindPage() {
       }
 
       const similarWebsites = data.similar_websites || [];
+      const originalWebsiteData = data.original_website || null;
+      
+      // Debug logging (remove in production)
+      if (process.env.NODE_ENV === 'development') {
+        console.log('📊 API Response Debug:', {
+          similarWebsites: similarWebsites.length,
+          originalWebsite: originalWebsiteData,
+          hasScreenshot: !!originalWebsiteData?.screenshot
+        });
+      }
       
       setResults(similarWebsites);
+      setOriginalWebsite(originalWebsiteData);
+      
+      // Temporary debug logging
+      console.log('🎯 Setting original website:', originalWebsiteData);
+      console.log('🎯 Has screenshot:', !!originalWebsiteData?.screenshot);
       
       // Cache the results for future use
-      setCachedResult(normalizedUrl, similarWebsites);
+      setCachedResult(normalizedUrl, similarWebsites, originalWebsiteData);
       
       // Refresh usage count after successful request
       await refreshUsage();
@@ -153,7 +183,13 @@ export default function FindPage() {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
       setIsLoading(false);
+      setShowProgress(false);
     }
+  };
+
+  const handleProgressComplete = () => {
+    // Progress animation completed, results should be ready
+    setShowProgress(false);
   };
 
   const normalizeUrl = (inputUrl: string) => {
@@ -225,7 +261,7 @@ export default function FindPage() {
                     {isLoading ? (
                       <>
                         <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                        Analyzing...
+                        {showProgress ? "Processing..." : "Analyzing..."}
                       </>
                     ) : (
                       <>
@@ -245,6 +281,13 @@ export default function FindPage() {
               </form>
             </CardContent>
           </Card>
+
+          {/* Progress Steps */}
+          <ProgressSteps 
+            isActive={showProgress && isLoading}
+            onComplete={handleProgressComplete}
+            websiteUrl={currentUrl}
+          />
 
           {/* Rate Limit Message */}
           {isRateLimited && (
@@ -282,7 +325,83 @@ export default function FindPage() {
 
           {/* Results Section */}
           {results.length > 0 && (
-            <div className="space-y-6">
+            <div className="space-y-8">
+
+              
+                                              {/* Original Website Display */}
+                {originalWebsite && (
+                  <div className="space-y-4">
+                    <div className="text-center">
+                      <h2 className="text-2xl font-bold mb-2">
+                        Original Website
+                      </h2>
+                      <p className="text-muted-foreground">
+                        The website you're comparing against
+                      </p>
+
+                    </div>
+                  
+                  <div className="flex justify-center">
+                    <Card className="w-full max-w-2xl border-primary/20 bg-gradient-to-br from-primary/5 via-transparent to-primary/10">
+                      <CardHeader className="p-0">
+                        <div className="relative aspect-video rounded-t-lg overflow-hidden bg-muted">
+                          {originalWebsite.screenshot ? (
+                            <Image
+                              src={originalWebsite.screenshot}
+                              alt={`Screenshot of ${originalWebsite.title || originalWebsite.url}`}
+                              fill
+                              className="object-cover"
+                              sizes="(max-width: 768px) 100vw, 672px"
+                              priority
+                              onError={(e) => {
+                                console.error('🖼️ Image failed to load:', originalWebsite.screenshot);
+                              }}
+                              onLoad={() => {
+                                console.log('✅ Image loaded successfully:', originalWebsite.screenshot);
+                              }}
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-muted">
+                              <p className="text-muted-foreground">Screenshot processing...</p>
+                            </div>
+                          )}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />
+                          <div className="absolute top-3 left-3">
+                            <Badge className="bg-primary text-primary-foreground font-medium">
+                              Original
+                            </Badge>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="p-6">
+                        <CardTitle className="text-xl mb-2 line-clamp-1">
+                          {originalWebsite.title || new URL(originalWebsite.url).hostname}
+                        </CardTitle>
+                        <CardDescription className="text-base mb-4 line-clamp-2">
+                          {originalWebsite.url}
+                        </CardDescription>
+                        <Button 
+                          variant="outline" 
+                          size="lg" 
+                          className="w-full group/btn"
+                          asChild
+                        >
+                          <a 
+                            href={originalWebsite.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center"
+                          >
+                            Visit Original Website
+                            <ExternalLink className="w-5 h-5 ml-2 group-hover/btn:translate-x-1 transition-transform" />
+                          </a>
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
+              )}
+
               <div className="text-center">
                 <h2 className="text-2xl font-bold mb-2">
                   Similar Websites Found

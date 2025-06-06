@@ -11,6 +11,7 @@ import {
   hasReachedLimit,
   SESSION_COOKIE_NAME
 } from "@/lib/session";
+import { createClient } from "@/lib/supabase-server";
 
 interface CachedApiResult {
   data: unknown;
@@ -85,46 +86,64 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Handle usage tracking for anonymous users
-    // TODO: Add authenticated user handling later
+    // Handle usage tracking
     await cookies();
     
-    // Get or create session
-    let session = await getSessionFromCookie();
-    if (!session) {
-      session = createNewSession();
-    }
+    // Check if user is authenticated
+    const authSupabase = await createClient();
+    const { data: { user }, error: authError } = await authSupabase.auth.getUser();
+    const isAuthenticated = user && !authError;
     
-    // Reset session if it's a new day
-    if (shouldResetSession(session)) {
-      session = resetSessionForNewDay(session);
-    }
+    console.log('🔐 Auth Debug:', {
+      hasUser: !!user,
+      userId: user?.id,
+      userEmail: user?.email,
+      authError: authError?.message,
+      isAuthenticated
+    });
     
-    // Check if user has reached limit
-    if (hasReachedLimit(session)) {
-      const response = NextResponse.json(
-        { 
-          error: "Daily limit reached", 
-          message: "You've reached your daily limit of free comparisons. Sign up for unlimited access!",
-          limit_info: {
-            comparisons_used: session.comparisons_used,
-            daily_limit: session.daily_limit,
-            reset_date: session.reset_date
-          }
-        },
-        { status: 429 }
-      );
+    // Initialize session for anonymous users (null for authenticated users)
+    let session = null;
+    
+    // For anonymous users only, check usage limits
+    if (!isAuthenticated) {
+      // Get or create session
+      session = await getSessionFromCookie();
+      if (!session) {
+        session = createNewSession();
+      }
       
-      // Update cookie even for rate limited requests
-      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 24 * 30, // 30 days
-        path: '/'
-      });
+      // Reset session if it's a new day
+      if (shouldResetSession(session)) {
+        session = resetSessionForNewDay(session);
+      }
       
-      return response;
+      // Check if user has reached limit
+      if (hasReachedLimit(session)) {
+        const response = NextResponse.json(
+          { 
+            error: "Daily limit reached", 
+            message: "You've reached your daily limit of free comparisons. Sign up for unlimited access!",
+            limit_info: {
+              comparisons_used: session.comparisons_used,
+              daily_limit: session.daily_limit,
+              reset_date: session.reset_date
+            }
+          },
+          { status: 429 }
+        );
+        
+        // Update cookie even for rate limited requests
+        response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 30, // 30 days
+          path: '/'
+        });
+        
+        return response;
+      }
     }
 
     // Check server-side cache first
@@ -134,9 +153,6 @@ export async function POST(request: NextRequest) {
     if (cachedResult) {
       console.log('🎯 Server cache hit for:', url);
       
-      // Still increment usage even for cached results
-      session = incrementSessionUsage(session);
-      
       const response = NextResponse.json(cachedResult, {
         headers: {
           'Cache-Control': 'public, max-age=900, s-maxage=1800', // 15 min browser, 30 min CDN
@@ -145,14 +161,17 @@ export async function POST(request: NextRequest) {
         }
       });
       
-      // Update session cookie
-      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 24 * 30, // 30 days
-        path: '/'
-      });
+      // Only increment usage and update cookie for anonymous users
+      if (!isAuthenticated && session) {
+        session = incrementSessionUsage(session);
+        response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 30, // 30 days
+          path: '/'
+        });
+      }
       
       return response;
     }
@@ -179,8 +198,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const embedResult = await embedResponse.json() as { embedding?: number[] };
+    const embedResult = await embedResponse.json() as { embedding?: number[]; screenshot_url?: string };
     const queryEmbedding = embedResult.embedding;
+    const screenshotUrl = embedResult.screenshot_url;
 
     if (!queryEmbedding || !Array.isArray(queryEmbedding)) {
       console.error('❌ Invalid embedding received:', embedResult);
@@ -192,7 +212,72 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ Embedding generated: ${queryEmbedding.length} dimensions`);
 
-    // Step 2: Query Supabase for similar embeddings using match_vectors
+    // Step 2: Check if the original website exists in database and handle storage
+    console.log('🔍 Checking if original website exists in database...');
+    const { data: originalWebsite, error: originalError } = await supabase
+      .from('landing_vectors')
+      .select('url, screenshot_url, id, created_at')
+      .eq('url', url)
+      .single();
+
+    console.log('🔍 Original website query result:', {
+      url,
+      found: !!originalWebsite,
+      error: originalError?.message,
+      errorCode: originalError?.code,
+      data: originalWebsite
+    });
+
+    let originalWebsiteInfo = null;
+
+    if (originalWebsite) {
+      // Website exists in database, use stored data
+      console.log('✅ Using existing website data from database');
+      originalWebsiteInfo = {
+        url: originalWebsite.url,
+        screenshot: originalWebsite.screenshot_url,
+        title: new URL(originalWebsite.url).hostname,
+        id: originalWebsite.id,
+        created_at: originalWebsite.created_at,
+        is_original: true
+      };
+    } else if (originalError?.code === 'PGRST116') {
+      // Website doesn't exist, create original website object with the new screenshot
+      console.log('🆕 Website not in database, using new screenshot...');
+      originalWebsiteInfo = {
+        url: url,
+        screenshot: screenshotUrl || `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="#f3f4f6"/><text x="200" y="150" text-anchor="middle" dy="0.3em" font-family="Arial, sans-serif" font-size="14" fill="#6b7280">Screenshot unavailable</text></svg>`).toString('base64')}`,
+        title: new URL(url).hostname,
+        id: null,
+        created_at: new Date().toISOString(),
+        is_original: true,
+        is_new: true // Flag to indicate this is a new website
+      };
+
+      // Save to database for future use if we have a screenshot URL
+      if (screenshotUrl) {
+        console.log('💾 Saving new website to database for future use...');
+        try {
+          const { data: insertData, error: insertError } = await supabase.rpc('insert_landing_vector', { 
+            p_url: url, 
+            p_emb: queryEmbedding, 
+            p_shot: screenshotUrl
+          });
+
+          if (insertError) {
+            console.warn('⚠️ Failed to save website to database:', insertError);
+          } else {
+            console.log('✅ Website saved to database for future use');
+          }
+        } catch (error) {
+          console.warn('⚠️ Error saving website to database:', error);
+        }
+      }
+    } else {
+      console.warn('⚠️ Could not query for original website:', originalError);
+    }
+
+    // Step 3: Query Supabase for similar embeddings using match_vectors
     console.log('🔎 Searching for similar websites in database...');
     const matchCount = 10; // Return top 10 similar websites
     
@@ -215,11 +300,16 @@ export async function POST(request: NextRequest) {
     if (!similarWebsites || similarWebsites.length === 0) {
       console.log('📭 No similar websites found');
       
-      // Increment usage even for empty results
-      session = incrementSessionUsage(session);
+      // Increment usage even for empty results (anonymous users only)
+      if (!isAuthenticated && session) {
+        session = incrementSessionUsage(session);
+      }
       
+              // originalWebsiteInfo is already prepared above (even for empty results)
+
       const emptyResult = {
         similar_websites: [],
+        original_website: originalWebsiteInfo,
         query_url: url,
         processed_at: new Date().toISOString(),
         message: "No similar websites found in database"
@@ -240,19 +330,21 @@ export async function POST(request: NextRequest) {
         }
       });
       
-      // Update session cookie
-      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-        maxAge: 60 * 60 * 24 * 30, // 30 days
-        path: '/'
-      });
+      // Update session cookie (anonymous users only)
+      if (!isAuthenticated && session) {
+        response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 30, // 30 days
+          path: '/'
+        });
+      }
       
       return response;
     }
 
-    // Step 3: Transform results to match expected format
+    // Step 4: Transform results to match expected format
     const transformedResults = similarWebsites.map((website: {
       url: string;
       screenshot_url: string;
@@ -270,16 +362,27 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ Found ${transformedResults.length} similar websites`);
 
-    // Increment usage for successful request
-    session = incrementSessionUsage(session);
+    // Increment usage for successful request (anonymous users only)
+    if (!isAuthenticated && session) {
+      session = incrementSessionUsage(session);
+    }
+
+    // originalWebsiteInfo is already prepared above
 
     const result = {
       similar_websites: transformedResults,
+      original_website: originalWebsiteInfo,
       query_url: url,
       query_embedding_dimensions: queryEmbedding.length,
       processed_at: new Date().toISOString(),
       cache_status: 'MISS'
     };
+
+    console.log('📤 API Response:', {
+      similarCount: transformedResults.length,
+      hasOriginal: !!originalWebsiteInfo,
+      originalData: originalWebsiteInfo
+    });
 
     // Cache the successful result
     setCachedResult(cacheKey, result);
@@ -292,14 +395,16 @@ export async function POST(request: NextRequest) {
       }
     });
     
-    // Update session cookie with incremented usage
-    response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 30, // 30 days
-      path: '/'
-    });
+    // Update session cookie with incremented usage (anonymous users only)
+    if (!isAuthenticated && session) {
+      response.cookies.set(SESSION_COOKIE_NAME, JSON.stringify(session), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 24 * 30, // 30 days
+        path: '/'
+      });
+    }
 
     return response;
 

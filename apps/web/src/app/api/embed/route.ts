@@ -3,6 +3,7 @@ import { embedImage } from '@website-similarity/embed';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import { createHash } from 'node:crypto';
+import { supabase } from '@website-similarity/db';
 
 // Screenshot configuration (from seed.ts)
 const VIEWPORT_WIDTH = 1980;
@@ -15,6 +16,7 @@ interface CachedEmbedResult {
     embedding: number[];
     dimensions: number;
     success: boolean;
+    screenshot_url?: string;
   };
   timestamp: number;
   expiresAt: number;
@@ -215,6 +217,29 @@ export async function POST(request: NextRequest) {
       }, { status: 500 });
     }
 
+    // Upload screenshot to storage
+    console.log('☁️ Uploading screenshot to storage for', new URL(url).hostname);
+    const fileName = `screens/${Date.now()}-${new URL(url).hostname}.jpg`;
+    const { data: uploadData, error: uploadError } = await supabase
+      .storage
+      .from('screenshots')
+      .upload(fileName, screenshotResult.buffer, { 
+        contentType: 'image/jpeg', 
+        upsert: true 
+      });
+
+    let screenshotUrl = null;
+    if (uploadError) {
+      console.warn('⚠️ Failed to upload screenshot:', uploadError);
+    } else {
+      const { data: { publicUrl } } = supabase
+        .storage
+        .from('screenshots')
+        .getPublicUrl(fileName);
+      screenshotUrl = publicUrl;
+      console.log('✅ Screenshot uploaded to storage');
+    }
+
     // Generate embedding from screenshot
     console.log('🧠 Generating CLIP embedding for', new URL(url).hostname);
     const embedding = await embedImage(screenshotResult.buffer);
@@ -224,7 +249,8 @@ export async function POST(request: NextRequest) {
       url,
       embedding,
       dimensions: embedding.length,
-      success: true 
+      success: true,
+      screenshot_url: screenshotUrl || undefined
     };
 
     // Cache the successful result
