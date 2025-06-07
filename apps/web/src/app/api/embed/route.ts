@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
     // Upload screenshot to storage
     console.log('☁️ Uploading screenshot to storage for', new URL(url).hostname);
     const fileName = `screens/${Date.now()}-${new URL(url).hostname}.jpg`;
-    const { data: uploadData, error: uploadError } = await supabase
+    const { error: uploadError } = await supabase
       .storage
       .from('screenshots')
       .upload(fileName, screenshotResult.buffer, { 

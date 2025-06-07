@@ -57,10 +57,11 @@ export function ProgressSteps({ isActive, onComplete, websiteUrl }: ProgressStep
 
     const executeStep = () => {
       if (currentIndex < steps.length) {
-        setCurrentStepIndex(currentIndex);
+        const stepIndex = currentIndex; // Capture the current index
+        setCurrentStepIndex(stepIndex);
         
         timeoutId = setTimeout(() => {
-          setCompletedSteps(prev => new Set([...prev, steps[currentIndex].id]));
+          setCompletedSteps(prev => new Set([...prev, steps[stepIndex].id]));
           currentIndex++;
           
           if (currentIndex < steps.length) {
@@ -72,7 +73,7 @@ export function ProgressSteps({ isActive, onComplete, websiteUrl }: ProgressStep
               onComplete?.();
             }, 1000);
           }
-        }, steps[currentIndex].estimatedDuration);
+        }, steps[stepIndex].estimatedDuration);
       }
     };
 
@@ -113,7 +114,6 @@ export function ProgressSteps({ isActive, onComplete, websiteUrl }: ProgressStep
           {steps.map((step, index) => {
             const isCompleted = completedSteps.has(step.id);
             const isCurrent = currentStepIndex === index;
-            const isPending = index > currentStepIndex;
 
             return (
               <div

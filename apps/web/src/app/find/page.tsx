@@ -336,7 +336,7 @@ export default function FindPage() {
                         Original Website
                       </h2>
                       <p className="text-muted-foreground">
-                        The website you're comparing against
+                        The website you&apos;re comparing against
                       </p>
 
                     </div>
@@ -353,7 +353,7 @@ export default function FindPage() {
                               className="object-cover"
                               sizes="(max-width: 768px) 100vw, 672px"
                               priority
-                              onError={(e) => {
+                              onError={() => {
                                 console.error('🖼️ Image failed to load:', originalWebsite.screenshot);
                               }}
                               onLoad={() => {

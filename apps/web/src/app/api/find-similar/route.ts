@@ -258,7 +258,7 @@ export async function POST(request: NextRequest) {
       if (screenshotUrl) {
         console.log('💾 Saving new website to database for future use...');
         try {
-          const { data: insertData, error: insertError } = await supabase.rpc('insert_landing_vector', { 
+          const { error: insertError } = await supabase.rpc('insert_landing_vector', { 
             p_url: url, 
             p_emb: queryEmbedding, 
             p_shot: screenshotUrl
