@@ -4,6 +4,24 @@
   "private": true,
   "type": "module",
   "main": "index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    },
+    "./client": {
+      "types": "./client.ts",
+      "import": "./client.ts"
+    },
+    "./client-only": {
+      "types": "./client-only.ts",
+      "import": "./client-only.ts"
+    },
+    "./service-role": {
+      "types": "./service-role.ts",
+      "import": "./service-role.ts"
+    }
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0"
   },

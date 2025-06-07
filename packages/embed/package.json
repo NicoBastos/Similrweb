@@ -4,6 +4,12 @@
   "private": true,
   "type": "module",
   "main": "index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts"
+    }
+  },
   "dependencies": {
     "openai": "^4.0.0",
     "p-retry": "^6.0.0"
