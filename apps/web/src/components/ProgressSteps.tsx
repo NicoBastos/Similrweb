@@ -22,21 +22,21 @@ const steps: Step[] = [
     title: "Taking Screenshot",
     description: "Capturing visual appearance of the website",
     icon: <Camera className="w-5 h-5" />,
-    estimatedDuration: 8000, // 8 seconds
+    estimatedDuration: 1500, // 1.5 seconds
   },
   {
     id: "embedding",
     title: "Generating CLIP Embedding",
     description: "Converting visual features into AI vectors",
     icon: <Brain className="w-5 h-5" />,
-    estimatedDuration: 25000, // 25 seconds
+    estimatedDuration: 2000, // 2 seconds
   },
   {
     id: "search",
     title: "Searching Database",
     description: "Finding visually similar websites",
     icon: <Search className="w-5 h-5" />,
-    estimatedDuration: 4000, // 4 seconds
+    estimatedDuration: 1500, // 1.5 seconds
   },
 ];
 

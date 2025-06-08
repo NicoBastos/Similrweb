@@ -22,14 +22,12 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
-      "@website-similarity/db": ["../../packages/db"],
-      "@website-similarity/embed": ["../../packages/embed"]
+      "@website-similarity/db": ["../../packages/db"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules"],
   "references": [
-    { "path": "../../packages/db" },
-    { "path": "../../packages/embed" }
+    { "path": "../../packages/db" }
   ]
 }

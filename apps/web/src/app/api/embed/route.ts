@@ -1,14 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { embedImage } from '@website-similarity/embed';
-import { chromium } from 'playwright';
-import type { Browser, Page } from 'playwright';
 import { createHash } from 'node:crypto';
 import { supabase } from '@website-similarity/db';
 
-// Screenshot configuration (from seed.ts)
-const VIEWPORT_WIDTH = 1980;
-const VIEWPORT_HEIGHT = 1080;
-const SCREENSHOT_TIMEOUT = 3000;
+// Modal endpoint configuration
+const MODAL_ENDPOINT = 'https://nicobastos--website-embed-service-web-generate-screensho-5f0b0c.modal.run';
+const MODAL_TIMEOUT = 30000; // 30 seconds
 
 interface CachedEmbedResult {
   data: {
@@ -70,107 +66,55 @@ function setCachedEmbedResult(cacheKey: string, data: EmbedResultData): void {
   });
 }
 
-async function takeScreenshot(browser: Browser, url: string): Promise<{ success: boolean; buffer?: Buffer; error?: string }> {
-  let page: Page | null = null;
-  
+async function generateScreenshotAndEmbedding(url: string): Promise<{
+  success: boolean;
+  embedding?: number[];
+  dimensions?: number;
+  screenshot?: string; // base64 encoded
+  error?: string;
+}> {
   try {
-    console.log('📷 Taking screenshot of', url);
-    page = await browser.newPage({ 
-      viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT } 
+    console.log('🚀 Calling Modal endpoint for', new URL(url).hostname);
+    
+    const response = await fetch(MODAL_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(MODAL_TIMEOUT),
     });
-    
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: SCREENSHOT_TIMEOUT });
-    
-    // Simulate real user behavior to reveal more content (from seed.ts)
-    try {
-      // 1. Dismiss common popups/overlays
-      const commonDismissSelectors = [
-        '[aria-label*="close"]',
-        '[aria-label*="dismiss"]', 
-        '.cookie-banner button',
-        '.modal-close',
-        '.popup-close',
-        '[data-testid*="close"]',
-        '.close-button',
-        'button[aria-label="Close"]'
-      ];
-      
-      for (const selector of commonDismissSelectors) {
-        try {
-          const element = await page.$(selector);
-          if (element) {
-            await element.click();
-            await page.waitForTimeout(200);
-            break; // Only dismiss one popup
-          }
-        } catch {
-          // Ignore errors, continue to next selector
-        }
-      }
 
-      // 2. Scroll to trigger lazy loading and scroll animations
-      console.log('🔄 Scrolling to reveal lazy-loaded content for', new URL(url).hostname);
-      await page.evaluate(() => {
-        // Instant scroll to bottom to trigger lazy loading
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'auto' });
-      });
-      await page.waitForTimeout(500);
-      
-      // Scroll back to top for the screenshot
-      await page.evaluate(() => {
-        window.scrollTo({ top: 0, behavior: 'auto' });
-      });
-      await page.waitForTimeout(200);
-
-      // 3. Wait for fonts and delayed animations
-      console.log('⏳ Waiting for fonts and animations to complete for', new URL(url).hostname);
-      await page.waitForTimeout(300);
-      
-      // 4. Trigger any auto-playing elements that might need interaction
-      await page.evaluate(() => {
-        // Find and trigger any paused videos or carousels
-        const videos = document.querySelectorAll('video');
-        videos.forEach(video => {
-          if (video.paused) {
-            video.play().catch(() => {}); // Ignore errors
-          }
-        });
-        
-        // Trigger any carousel advancement
-        const carouselNext = document.querySelector('[aria-label*="next"], .carousel-next, .slider-next');
-        if (carouselNext instanceof HTMLElement) {
-          carouselNext.click();
-        }
-      });
-      await page.waitForTimeout(200);
-
-    } catch {
-      console.log('⚠️ Some interactive elements failed for', new URL(url).hostname, '- continuing with screenshot');
+    if (!response.ok) {
+      throw new Error(`Modal endpoint responded with ${response.status}: ${response.statusText}`);
     }
+
+    const result = await response.json();
     
-    const buffer = await page.screenshot({ 
-      clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }, 
-      type: 'jpeg',
-      quality: 92 
-    });
+    if (!result.success) {
+      throw new Error(result.error || 'Modal endpoint returned success: false');
+    }
+
+    console.log('✅ Modal endpoint completed for', new URL(url).hostname, `(${result.dimensions} dimensions)`);
     
-    console.log('✅ Screenshot completed for', new URL(url).hostname);
-    return { success: true, buffer };
+    return {
+      success: true,
+      embedding: result.embedding,
+      dimensions: result.dimensions,
+      screenshot: result.screenshot, // base64 encoded
+    };
     
-  } catch (error) { 
+  } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error('❌ Screenshot failed for', url, ':', errorMsg);
-    return { success: false, error: errorMsg };
-  } finally {
-    if (page) {
-      await page.close().catch(() => {}); // Ignore close errors
-    }
+    console.error('❌ Modal endpoint failed for', url, ':', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
   }
 }
 
 export async function POST(request: NextRequest) {
-  let browser: Browser | null = null;
-  
   try {
     const body = await request.json();
     const { url } = body;
@@ -203,27 +147,25 @@ export async function POST(request: NextRequest) {
 
     console.log('🚀 Starting embed process for', url);
     
-    // Launch browser
-    browser = await chromium.launch();
+    // Generate screenshot and embedding via Modal endpoint
+    const modalResult = await generateScreenshotAndEmbedding(url);
     
-    // Take screenshot
-    const screenshotResult = await takeScreenshot(browser, url);
-    
-    if (!screenshotResult.success || !screenshotResult.buffer) {
+    if (!modalResult.success || !modalResult.embedding || !modalResult.screenshot || !modalResult.dimensions) {
       return NextResponse.json({ 
-        error: 'Screenshot failed',
-        details: screenshotResult.error,
+        error: 'Screenshot and embedding generation failed',
+        details: modalResult.error,
         success: false 
       }, { status: 500 });
     }
 
     // Upload screenshot to storage
     console.log('☁️ Uploading screenshot to storage for', new URL(url).hostname);
+    const screenshotBuffer = Buffer.from(modalResult.screenshot, 'base64');
     const fileName = `screens/${Date.now()}-${new URL(url).hostname}.jpg`;
     const { error: uploadError } = await supabase
       .storage
       .from('screenshots')
-      .upload(fileName, screenshotResult.buffer, { 
+      .upload(fileName, screenshotBuffer, { 
         contentType: 'image/jpeg', 
         upsert: true 
       });
@@ -239,16 +181,11 @@ export async function POST(request: NextRequest) {
       screenshotUrl = publicUrl;
       console.log('✅ Screenshot uploaded to storage');
     }
-
-    // Generate embedding from screenshot
-    console.log('🧠 Generating CLIP embedding for', new URL(url).hostname);
-    const embedding = await embedImage(screenshotResult.buffer);
-    console.log('✅ Embedding completed for', new URL(url).hostname, `(${embedding.length} dimensions)`);
     
     const result = { 
       url,
-      embedding,
-      dimensions: embedding.length,
+      embedding: modalResult.embedding,
+      dimensions: modalResult.dimensions,
       success: true,
       screenshot_url: screenshotUrl || undefined
     };
@@ -274,21 +211,24 @@ export async function POST(request: NextRequest) {
       details: errorMessage,
       success: false 
     }, { status: 500 });
-  } finally {
-    if (browser) {
-      await browser.close().catch(() => {});
-    }
   }
 }
 
 export async function GET() {
   try {
-    const { checkHealth } = await import('@website-similarity/embed');
-    const isHealthy = await checkHealth();
+    // Health check the Modal endpoint
+    const healthResponse = await fetch(`${MODAL_ENDPOINT}/health`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000), // 5 second timeout for health check
+    });
+    
+    const isHealthy = healthResponse.ok;
     
     const healthData = {
       status: isHealthy ? 'healthy' : 'unhealthy',
-      service: 'CLIP embedding with screenshot',
+      service: 'CLIP embedding with screenshot via Modal',
+      modal_endpoint: MODAL_ENDPOINT,
+      modal_status: healthResponse.status,
       embed_cache_size: embedCache.size,
       embed_cache_entries: Array.from(embedCache.keys()).map(key => ({
         key: key.substring(0, 8) + '...',
@@ -306,7 +246,8 @@ export async function GET() {
   } catch (error) {
     return NextResponse.json({
       status: 'unhealthy',
-      service: 'CLIP embedding with screenshot',
+      service: 'CLIP embedding with screenshot via Modal',
+      modal_endpoint: MODAL_ENDPOINT,
       error: error instanceof Error ? error.message : 'Unknown error',
       embed_cache_size: embedCache.size,
       timestamp: new Date().toISOString()

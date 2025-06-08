@@ -6,8 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "postinstall": "npx playwright install chromium --with-deps"
+    "lint": "next lint"
   },
   "dependencies": {
     "@radix-ui/react-progress": "^1.1.7",
@@ -15,13 +14,11 @@
     "@supabase/ssr": "^0.6.1",
     "@types/uuid": "^10.0.0",
     "@website-similarity/db": "file:../../packages/db",
-    "@website-similarity/embed": "file:../../packages/embed",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dotenv": "^16.5.0",
     "lucide-react": "^0.513.0",
     "next": "15.3.2",
-    "playwright": "^1.52.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.3.0",
