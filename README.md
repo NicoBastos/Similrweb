@@ -4,9 +4,6 @@ A Next.js 14 application for analyzing visual similarity between websites using 
 
 ## Architecture
 
-
-
-
 - **Frontend + API**: Next.js 14 with App Router
 - **Database**: Supabase Postgres with pgvector extension
 - **Embeddings**: OpenAI CLIP (via open-clip-torch) for image similarity
