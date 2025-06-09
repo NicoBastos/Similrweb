@@ -35,11 +35,11 @@ export default function Home() {
               <span className="text-gradient">Similrweb</span>
             </h1>
             
-            <p className="text-xl sm:text-2xl text-white/80 max-w-2xl mx-auto leading-relaxed">
+            <p className="text-xl sm:text-2xl text-foreground/80 max-w-2xl mx-auto leading-relaxed">
               See the web through similarity
             </p>
             
-            <p className="text-lg text-white/70 max-w-3xl mx-auto">
+            <p className="text-lg text-foreground/70 max-w-3xl mx-auto">
               Discover design patterns, analyze visual similarities, and understand web aesthetics with our advanced AI-powered comparison tool.
             </p>
             
@@ -79,7 +79,7 @@ export default function Home() {
                 <CardTitle className="text-xl">Visual Similarity Detection</CardTitle>
               </CardHeader>
               <CardContent>
-                <CardDescription className="text-center text-base leading-relaxed">
+                <CardDescription className="text-center text-base text-foreground/70 leading-relaxed">
                   Advanced computer vision algorithms analyze layout, color schemes, typography, and design patterns to identify visual relationships between websites.
                 </CardDescription>
               </CardContent>
@@ -93,7 +93,7 @@ export default function Home() {
                 <CardTitle className="text-xl">Comprehensive Analytics</CardTitle>
               </CardHeader>
               <CardContent>
-                <CardDescription className="text-center text-base leading-relaxed">
+                <CardDescription className="text-center text-base text-foreground/70 leading-relaxed">
                   Get detailed insights with similarity scores, design trend analysis, and comprehensive reports that help you understand web design patterns.
                 </CardDescription>
               </CardContent>
@@ -107,7 +107,7 @@ export default function Home() {
                 <CardTitle className="text-xl">Smart Recommendations</CardTitle>
               </CardHeader>
               <CardContent>
-                <CardDescription className="text-center text-base leading-relaxed">
+                <CardDescription className="text-center text-base text-foreground/70 leading-relaxed">
                   Receive AI-powered suggestions for design improvements and discover websites with similar aesthetics to inspire your next project.
                 </CardDescription>
               </CardContent>
@@ -135,7 +135,7 @@ export default function Home() {
               </div>
               <div className="text-primary font-bold text-sm tracking-wide">STEP 1</div>
               <h3 className="text-xl font-semibold">Enter Website URLs</h3>
-              <p className="text-white/70 leading-relaxed">
+              <p className="text-foreground/70 leading-relaxed">
                 Simply paste the URLs of the websites you want to compare. Our system supports any publicly accessible website.
               </p>
             </div>
@@ -146,7 +146,7 @@ export default function Home() {
               </div>
               <div className="text-secondary font-bold text-sm tracking-wide">STEP 2</div>
               <h3 className="text-xl font-semibold">AI Analysis</h3>
-              <p className="text-white/70 leading-relaxed">
+              <p className="text-foreground/70 leading-relaxed">
                 Our advanced AI algorithms capture screenshots and analyze visual elements, extracting key design features and patterns.
               </p>
             </div>
@@ -157,7 +157,7 @@ export default function Home() {
               </div>
               <div className="text-accent font-bold text-sm tracking-wide">STEP 3</div>
               <h3 className="text-xl font-semibold">Get Results</h3>
-              <p className="text-white/70 leading-relaxed">
+              <p className="text-foreground/70 leading-relaxed">
                 Receive detailed similarity scores, visual comparisons, and actionable insights to inform your design decisions.
               </p>
             </div>
@@ -172,7 +172,7 @@ export default function Home() {
             <h2 className="text-3xl sm:text-4xl font-bold">
               Ready to <span className="text-gradient">Explore</span> Website Similarities?
             </h2>
-            <p className="text-lg text-white/70 max-w-2xl mx-auto">
+            <p className="text-lg text-foreground/70 max-w-2xl mx-auto">
               Join thousands of designers and developers who use Similrweb to analyze and improve their web designs.
             </p>
             <Link href="/find">
@@ -194,7 +194,7 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8">
             <div className="space-y-4">
               <h3 className="text-xl font-bold text-gradient">Similrweb</h3>
-              <p className="text-white/80">
+              <p className="text-foreground/80">
                 AI-powered website similarity analysis for designers and developers.
               </p>
             </div>
@@ -202,27 +202,25 @@ export default function Home() {
             <div className="space-y-3">
               <h4 className="font-semibold">Product</h4>
               <div className="space-y-2 text-sm">
-                <a href="https://github.com/NicoBastos/Similrweb" className="block text-white/60 hover:text-primary transition-colors">Source Code</a>
+                <a href="https://github.com/NicoBastos/Similrweb" className="block text-foreground/60 hover:text-primary transition-colors">Source Code</a>
               </div>
             </div>
-            
-         
             
             <div className="space-y-3">
               <h4 className="font-semibold">Connect</h4>
               <div className="flex space-x-4">
-                <a href="#" className="text-white/60 hover:text-primary transition-colors">
+                <a href="#" className="text-foreground/60 hover:text-primary transition-colors">
                   <Github className="w-5 h-5" />
                 </a>
-                <a href="mailto:nickbastos4gmail.com" className="text-white/60 hover:text-primary transition-colors">
+                <a href="mailto:nickbastos4gmail.com" className="text-foreground/60 hover:text-primary transition-colors">
                   <Mail className="w-5 h-5" />
                 </a>
               </div>
             </div>
           </div>
           
-          <div className="border-t border-border/50 mt-8 pt-8 text-center text-sm text-white/60">
-            <p>&copy; 2024 Similrweb. All rights reserved.</p>
+          <div className="border-t border-border/50 mt-8 pt-8 text-center text-sm text-foreground/60">
+            <p>&copy; 2025 Similrweb. All rights reserved.</p>
           </div>
         </div>
       </footer>
