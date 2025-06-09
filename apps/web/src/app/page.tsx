@@ -53,13 +53,6 @@ export default function Home() {
                   <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform" />
                 </Button>
               </Link>
-              <Button 
-                variant="outline" 
-                size="lg"
-                className="border-primary/30 hover:bg-primary/10 px-8 py-4 rounded-full text-lg"
-              >
-                Watch Demo
-              </Button>
             </div>
           </div>
         </div>
@@ -209,22 +202,11 @@ export default function Home() {
             <div className="space-y-3">
               <h4 className="font-semibold">Product</h4>
               <div className="space-y-2 text-sm">
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">Features</a>
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">Pricing</a>
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">API</a>
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">Documentation</a>
+                <a href="https://github.com/NicoBastos/Similrweb" className="block text-white/60 hover:text-primary transition-colors">Source Code</a>
               </div>
             </div>
             
-            <div className="space-y-3">
-              <h4 className="font-semibold">Company</h4>
-              <div className="space-y-2 text-sm">
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">About</a>
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">Blog</a>
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">Careers</a>
-                <a href="#" className="block text-white/60 hover:text-primary transition-colors">Contact</a>
-              </div>
-            </div>
+         
             
             <div className="space-y-3">
               <h4 className="font-semibold">Connect</h4>
@@ -232,11 +214,8 @@ export default function Home() {
                 <a href="#" className="text-white/60 hover:text-primary transition-colors">
                   <Github className="w-5 h-5" />
                 </a>
-                <a href="#" className="text-white/60 hover:text-primary transition-colors">
+                <a href="mailto:nickbastos4gmail.com" className="text-white/60 hover:text-primary transition-colors">
                   <Mail className="w-5 h-5" />
-                </a>
-                <a href="#" className="text-white/60 hover:text-primary transition-colors">
-                  <Globe className="w-5 h-5" />
                 </a>
               </div>
             </div>

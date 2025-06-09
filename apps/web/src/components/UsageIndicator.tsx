@@ -3,7 +3,6 @@ import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Progress } from '@/components/ui/progress';
 import { User, Zap, LogIn } from 'lucide-react';
 import { AuthModal } from './AuthModal';
 
@@ -68,7 +67,6 @@ export function UsageIndicator({ showUpgradePrompt = false }: UsageIndicatorProp
   }
 
   // Anonymous users see usage progress and sign in button
-  const progressPercentage = (usage.comparisons_used / usage.daily_limit) * 100;
   const isNearLimit = usage.comparisons_used >= usage.daily_limit - 1;
   const hasReachedLimit = usage.has_reached_limit;
 
@@ -83,15 +81,6 @@ export function UsageIndicator({ showUpgradePrompt = false }: UsageIndicatorProp
             <Zap className="w-4 h-4 mr-1" />
             {usage.usage_display} free today
           </Badge>
-          
-          {!hasReachedLimit && (
-            <div className="w-16 h-2 bg-secondary rounded-full overflow-hidden">
-              <Progress 
-                value={progressPercentage} 
-                className="h-full"
-              />
-            </div>
-          )}
         </div>
 
         {/* Sign In Button */}
