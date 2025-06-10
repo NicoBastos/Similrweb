@@ -19,13 +19,6 @@ export async function GET() {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     
-    console.log('🔐 Usage Auth Debug:', {
-      hasUser: !!user,
-      userId: user?.id,
-      userEmail: user?.email,
-      authError: authError?.message,
-      isAuthenticated: !!(user && !authError)
-    });
     
     // If user is authenticated, return unlimited usage
     if (user && !authError) {

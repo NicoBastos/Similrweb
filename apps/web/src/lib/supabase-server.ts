@@ -12,11 +12,7 @@ export async function createClient() {
     cookie.name.includes('session')
   );
   
-  console.log('🍪 Server cookies debug:', {
-    totalCookies: allCookies.length,
-    authCookies: authCookies.map(c => ({ name: c.name, hasValue: !!c.value })),
-    allCookieNames: allCookies.map(c => c.name)
-  });
+
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
