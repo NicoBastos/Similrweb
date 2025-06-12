@@ -1,4 +1,4 @@
-#!/usr/bin/env ts-node
+#!/usr/bin/env tsx
 /* scripts/scrape.ts */
 import 'dotenv/config';
 import { chromium } from 'playwright';

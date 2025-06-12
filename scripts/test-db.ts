@@ -1,6 +1,6 @@
-#!/usr/bin/env ts-node
+#!/usr/bin/env tsx
 import 'dotenv/config';
-import { supabase } from '../packages/db/service-role.ts';
+import { supabase } from '../packages/db/service-role.js';
 
 async function testDatabase() {
   console.log('🔍 Testing database connection and checking for websites...\n');
