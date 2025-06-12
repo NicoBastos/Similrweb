@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Eye, Zap, Target, ArrowRight, Search, BarChart3, CheckCircle, Github, Mail, Globe } from "lucide-react";
+import { Eye, Zap, Target, ArrowRight, Search, BarChart3, CheckCircle, Github, Mail } from "lucide-react";
 import Link from "next/link";
 import { UsageIndicator } from "@/components/UsageIndicator";
 

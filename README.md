@@ -10,75 +10,54 @@ A Next.js 14 application for analyzing visual similarity between websites using 
 - **Screenshots**: Playwright for automated website captures
 - **Storage**: Supabase Storage for screenshot files
 
-## Setup
+## Getting Started
 
-### 1. Install Dependencies
+### Prerequisites
 
-```bash
-# Install Node.js dependencies
-npm install
+- Node.js (v18 or later)
+- npm (v9 or later)
+- Python (v3.9 or later)
 
-# Create Python virtual environment and install CLIP dependencies
-npm run setup
-```
+### Installation
 
-This creates a `.venv` virtual environment and installs:
-- `torch` - PyTorch for deep learning
-- `open-clip-torch` - Open-source CLIP implementation
-- `Pillow` - Image processing
+1.  **Clone the repository:**
 
-### 2. Environment Variables
+    ```bash
+    git clone https://github.com/your-username/your-repo-name.git
+    cd your-repo-name
+    ```
 
-Create `.env.local`:
+2.  **Install dependencies and set up the environment:**
 
-```env
-# Supabase
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-```
+    This single command installs all npm packages and sets up the Python virtual environment.
 
-### 3. Database Setup
+    ```bash
+    npm install && npm run setup
+    ```
 
-**IMPORTANT**: CLIP embeddings are **512 dimensions**, not 1536 like OpenAI text embeddings.
+3.  **Set up environment variables:**
 
-#### Option A: New Database Setup
-If setting up a new database, use:
-```sql
--- Create table with correct CLIP embedding dimensions
-CREATE TABLE landing_vectors (
-  id serial PRIMARY KEY,
-  url text NOT NULL,
-  embedding vector(512), -- 512 for CLIP, not 1536
-  screenshot_url text,
-  created_at timestamp DEFAULT now()
-);
+    Create a `.env` file in the root of the project and add the necessary environment variables. See `.env.example` for a template.
 
--- Create index for similarity search
-CREATE INDEX ON landing_vectors 
-USING ivfflat (embedding vector_cosine_ops) 
-WITH (lists = 100);
-```
+4.  **Run the application:**
 
-#### Option B: Migrating from OpenAI Embeddings
-If you have an existing database with 1536-dimensional embeddings:
-```sql
--- Update existing table to CLIP dimensions
-ALTER TABLE your_table_name 
-ALTER COLUMN embedding SET DATA TYPE vector(512);
+    ```bash
+    npm run dev
+    ```
 
--- You may need to recreate indexes
-DROP INDEX IF EXISTS your_embedding_index;
-CREATE INDEX ON your_table_name 
-USING ivfflat (embedding vector_cosine_ops) 
-WITH (lists = 100);
-```
+    The application will be available at `http://localhost:3000`.
 
-Your database should also have:
-- pgvector extension enabled
-- `screenshots` storage bucket
-- `match_vectors` RPC function for similarity search (updated for 512 dims)
-- `insert_landing_vector` RPC function for inserting embeddings (updated for 512 dims)
+## Scripts
+
+- `npm run dev`: Starts the development server.
+- `npm run build`: Builds the application for production.
+- `npm run start`: Starts the production server.
+- `npm run lint`: Lints the code.
+- `npm run setup`: Sets up the Python virtual environment.
+- `npm run seed`: Seeds the database with initial data.
+- `npm run scrape`: Scrapes websites for screenshots.
+- `npm run clear-screenshots`: Clears all screenshots from the storage bucket.
+- `npm run test-db`: Tests the database connection.
 
 ## Usage
 

@@ -13,16 +13,13 @@
     "build": "npm run build --workspace=apps/web",
     "start": "npm run start --workspace=apps/web",
     "lint": "npm run lint --workspace=apps/web",
-    "setup": "cross-env python -m venv .venv && cross-env .venv/Scripts/python -m pip install -r requirements.txt",
-    "setup:mac": "cross-env python3 -m venv .venv && cross-env .venv/bin/python -m pip install -r requirements.txt",
     "seed": "ts-node scripts/seed.ts",
     "scrape": "ts-node scripts/scrape.ts",
     "clear-screenshots": "ts-node scripts/clear-screenshots.ts",
     "test-db": "ts-node scripts/test-db.ts"
   },
   "devDependencies": {
-    "typescript": "^5",
-    "cross-env": "^7.0.3"
+    "typescript": "^5"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

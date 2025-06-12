@@ -2,12 +2,22 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync } from 'fs';
+import path from 'path';
 
 const execAsync = promisify(exec);
 
 // Get current directory for ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Path to the virtual environment
+const venvDir = resolve(__dirname, '..', '..', '.venv');
+
+// Determine the correct python executable path
+const pythonExecutable = process.platform === 'win32'
+  ? path.join(venvDir, 'Scripts', 'python')
+  : path.join(venvDir, 'bin', 'python');
 
 // Modal endpoint configuration for web API
 const MODAL_ENDPOINT = 'https://nicobastos--website-embed-service-web-generate-screensho-5f0b0c.modal.run';
@@ -26,6 +36,13 @@ export interface EmbedResult {
  * This runs the Python script directly without Modal for better performance in seed scripts
  */
 export async function embedImage(imageBuffer: Buffer): Promise<number[]> {
+  // Check if python environment is set up
+  if (!existsSync(pythonExecutable)) {
+    throw new Error(
+      `Python executable not found at ${pythonExecutable}. Please run 'npm run setup' first.`
+    );
+  }
+
   try {
     // Convert buffer to base64
     const base64Image = imageBuffer.toString('base64');
@@ -34,7 +51,7 @@ export async function embedImage(imageBuffer: Buffer): Promise<number[]> {
     const pythonScript = resolve(__dirname, 'local_embedder.py');
     
     // Execute Python script
-    const { stdout, stderr } = await execAsync(`python3 "${pythonScript}" "${base64Image}"`);
+    const { stdout, stderr } = await execAsync(`"${pythonExecutable}" "${pythonScript}" "${base64Image}"`);
     
     // Only treat stderr as an error if we don't have valid stdout or if the process failed
     // This allows warnings (like PEFT warnings) to be ignored while still catching real errors
