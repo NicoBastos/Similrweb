@@ -37,7 +37,7 @@ A Next.js 14 application for analyzing visual similarity between websites using 
 
 3.  **Set up environment variables:**
 
-    Create a `.env` file in the root of the project and add the necessary environment variables. See `.env.example` for a template.
+    Create a `.env` file in the root of the project and add the necessary environment variables.
 
 4.  **Run the application:**
 
