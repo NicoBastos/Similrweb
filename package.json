@@ -13,6 +13,7 @@
     "build": "npm run build --workspace=apps/web",
     "start": "npm run start --workspace=apps/web",
     "lint": "npm run lint --workspace=apps/web",
+    "setup": "tsx scripts/setup.ts",
     "seed": "tsx scripts/seed.ts",
     "scrape": "tsx scripts/scrape.ts",
     "clear-screenshots": "tsx scripts/clear-screenshots.ts",

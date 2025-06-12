@@ -78,11 +78,15 @@ class LocalDreamSimEmbedder:
         return self.embed_buffer(image_data)
 
 def main():
-    if len(sys.argv) != 2:
-        print(json.dumps({"success": False, "error": "Usage: python local_embedder.py <base64_image>"}))
-        sys.exit(1)
-    
-    base64_image = sys.argv[1]
+    # Accept base64 either as a single CLI arg or via STDIN (for long payloads)
+    if len(sys.argv) == 2:
+        base64_image = sys.argv[1]
+    else:
+        # Read entire stdin
+        base64_image = sys.stdin.read().strip()
+        if not base64_image:
+            print(json.dumps({"success": False, "error": "No base64 image supplied via stdin"}))
+            sys.exit(1)
     
     try:
         embedder = LocalDreamSimEmbedder()

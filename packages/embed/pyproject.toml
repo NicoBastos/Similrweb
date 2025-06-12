@@ -20,6 +20,9 @@ dependencies = [
     "Pillow==10.2.0",
     "requests==2.31.0",
     "modal",
+    "transformers>=4.21.0",
+    "beautifulsoup4>=4.11.0",
+    "dreamsim",
 ]
 
 [project.optional-dependencies]

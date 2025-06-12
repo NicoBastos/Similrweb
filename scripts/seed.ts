@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import { supabase } from '../packages/db/index.js';
-import { embedImage } from '../packages/embed/index.js';
+import { embedImage, embedDOM } from '../packages/embed/index.ts';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
@@ -23,13 +23,15 @@ interface ScreenshotResult {
   error?: string;
   buffer?: Buffer;
   publicUrl?: string;
+  domContent?: string;
 }
 
 interface EmbeddingResult {
   url: string;
   success: boolean;
   error?: string;
-  embedding?: number[];
+  screenshotEmbedding?: number[];
+  domEmbedding?: number[];
   publicUrl?: string;
 }
 
@@ -491,11 +493,11 @@ async function dismissModalsAndPopups(page: Page): Promise<void> {
   }
 }
 
-async function takeScreenshot(browser: Browser, url: string): Promise<ScreenshotResult> {
+async function takeScreenshotAndCaptureDom(browser: Browser, url: string): Promise<ScreenshotResult> {
   let page: Page | null = null;
   
   try {
-    console.log('📷 Taking screenshot of', url);
+    console.log('📷 Taking screenshot and capturing DOM of', url);
     page = await browser.newPage({ 
       viewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT } 
     });
@@ -548,6 +550,11 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
       console.log('⚠️ Some interactive elements failed for', new URL(url).hostname, '- continuing with screenshot');
     }
     
+    // Capture DOM content
+    console.log('📄 Capturing DOM content for', new URL(url).hostname);
+    const domContent = await page.content();
+    
+    // Take screenshot
     const buf = await page.screenshot({ 
       clip: { x: 0, y: 0, width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT }, 
       type: 'jpeg',
@@ -573,12 +580,12 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
       .from('screenshots')
       .getPublicUrl(fileName);
 
-    console.log('✅ Screenshot completed for', new URL(url).hostname);
-    return { url, success: true, buffer: buf, publicUrl };
+    console.log('✅ Screenshot and DOM capture completed for', new URL(url).hostname);
+    return { url, success: true, buffer: buf, publicUrl, domContent };
     
   } catch (err) { 
     const errorMsg = err instanceof Error ? err.message : String(err);
-    console.error('❌ Screenshot failed for', url, ':', errorMsg);
+    console.error('❌ Screenshot and DOM capture failed for', url, ':', errorMsg);
     return { url, success: false, error: errorMsg };
   } finally {
     if (page) {
@@ -587,29 +594,39 @@ async function takeScreenshot(browser: Browser, url: string): Promise<Screenshot
   }
 }
 
-async function generateEmbedding(screenshotResult: ScreenshotResult): Promise<EmbeddingResult> {
-  if (!screenshotResult.success || !screenshotResult.buffer) {
+async function generateEmbeddings(screenshotResult: ScreenshotResult): Promise<EmbeddingResult> {
+  if (!screenshotResult.success || !screenshotResult.buffer || !screenshotResult.domContent) {
     return {
       url: screenshotResult.url,
       success: false,
-      error: screenshotResult.error || 'No screenshot buffer available'
+      error: screenshotResult.error || 'No screenshot buffer or DOM content available'
     };
   }
 
   try {
-    console.log('🧠 Generating CLIP embedding for', new URL(screenshotResult.url).hostname);
-    const embedding = await embedImage(screenshotResult.buffer);
-    console.log('✅ Embedding completed for', new URL(screenshotResult.url).hostname, `(${embedding.length} dimensions)`);
+    console.log('🧠 Generating embeddings for', new URL(screenshotResult.url).hostname);
     
+    // Generate screenshot embedding
+    console.log('🖼️ Generating CLIP embedding for screenshot...');
+    const screenshotEmbedding = await embedImage(screenshotResult.buffer);
+    console.log('✅ Screenshot embedding completed', `(${screenshotEmbedding.length} dimensions)`);
+    
+    // Generate DOM embedding
+    console.log('🌐 Generating MarkupLM embedding for DOM...');
+    const domEmbedding = await embedDOM(screenshotResult.domContent);
+    console.log('✅ DOM embedding completed', `(${domEmbedding.length} dimensions)`);
+    
+    console.log('✅ All embeddings completed for', new URL(screenshotResult.url).hostname);
     return {
       url: screenshotResult.url,
       success: true,
-      embedding,
+      screenshotEmbedding,
+      domEmbedding,
       publicUrl: screenshotResult.publicUrl
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    console.error('❌ Embedding failed for', screenshotResult.url, ':', errorMsg);
+    console.error('❌ Embedding generation failed for', screenshotResult.url, ':', errorMsg);
     return {
       url: screenshotResult.url,
       success: false,
@@ -619,11 +636,11 @@ async function generateEmbedding(screenshotResult: ScreenshotResult): Promise<Em
 }
 
 async function insertToDatabase(embeddingResult: EmbeddingResult): Promise<ProcessResult> {
-  if (!embeddingResult.success || !embeddingResult.embedding) {
+  if (!embeddingResult.success || !embeddingResult.screenshotEmbedding || !embeddingResult.domEmbedding) {
     return {
       url: embeddingResult.url,
       success: false,
-      error: embeddingResult.error || 'No embedding available'
+      error: embeddingResult.error || 'No embeddings available'
     };
   }
 
@@ -631,7 +648,8 @@ async function insertToDatabase(embeddingResult: EmbeddingResult): Promise<Proce
     console.log('💾 Inserting into database for', new URL(embeddingResult.url).hostname);
     const { data: insertData, error: insertError } = await supabase.rpc('insert_landing_vector', { 
       p_url: embeddingResult.url, 
-      p_emb: embeddingResult.embedding, 
+      p_screenshot_emb: embeddingResult.screenshotEmbedding, 
+      p_dom_emb: embeddingResult.domEmbedding,
       p_shot: embeddingResult.publicUrl 
     });
 
@@ -729,7 +747,7 @@ async function processBatchPipeline(
   console.log(`\n📷 BATCH ${batchNumber}: Taking screenshots of ${legitimateUrls.length} legitimate websites`);
   const screenshotResults = await processConcurrentBatch(
     legitimateUrls,
-    (url) => takeScreenshot(browser, url),
+    (url) => takeScreenshotAndCaptureDom(browser, url),
     SCREENSHOT_CONCURRENT_LIMIT,
     `Batch ${batchNumber} Screenshots`,
     progressTracker
@@ -754,7 +772,7 @@ async function processBatchPipeline(
   console.log(`\n🧠 BATCH ${batchNumber}: Generating embeddings`);
   const embeddingResults = await processConcurrentBatch(
     successfulScreenshots,
-    generateEmbedding,
+    generateEmbeddings,
     EMBEDDING_CONCURRENT_LIMIT,
     `Batch ${batchNumber} Embeddings`,
     progressTracker
