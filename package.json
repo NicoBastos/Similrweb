@@ -15,10 +15,10 @@
     "lint": "npm run lint --workspace=apps/web",
     "setup": "cross-env python -m venv .venv && cross-env .venv/Scripts/python -m pip install -r requirements.txt",
     "setup:mac": "cross-env python3 -m venv .venv && cross-env .venv/bin/python -m pip install -r requirements.txt",
-    "seed": "cross-env .venv/Scripts/python scripts/seed.py",
-    "seed:mac": "cross-env .venv/bin/python scripts/seed.py",
-    "scrape": "cross-env .venv/Scripts/python scripts/scrape.py",
-    "scrape:mac": "cross-env .venv/bin/python scripts/scrape.py"
+    "seed": "ts-node scripts/seed.ts",
+    "scrape": "ts-node scripts/scrape.ts",
+    "clear-screenshots": "ts-node scripts/clear-screenshots.ts",
+    "test-db": "ts-node scripts/test-db.ts"
   },
   "devDependencies": {
     "typescript": "^5",

@@ -9,8 +9,22 @@ import sys
 import json
 import base64
 import io
+import os
+import warnings
+from contextlib import contextmanager
 from PIL import Image
 import torch
+
+@contextmanager
+def suppress_stdout():
+    """Context manager to suppress stdout during model loading"""
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 class LocalDreamSimEmbedder:
     def __init__(self):
@@ -22,15 +36,19 @@ class LocalDreamSimEmbedder:
     def setup(self):
         """Initialize the DreamSim model with OpenCLIP single-branch"""
         try:
-            from dreamsim import dreamsim
-            
-            # Use OpenCLIP single-branch model for ~3x speedup over ensemble
-            self.model, self.preprocess = dreamsim(
-                pretrained=True, 
-                device=self.device,
-                dreamsim_type="openclip_vitb32"
-            )
-            self.model.eval()
+            # Suppress warnings and stdout during model loading
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with suppress_stdout():
+                    from dreamsim import dreamsim
+                    
+                    # Use OpenCLIP single-branch model for ~3x speedup over ensemble
+                    self.model, self.preprocess = dreamsim(
+                        pretrained=True, 
+                        device=self.device,
+                        dreamsim_type="open_clip_vitb32"
+                    )
+                    self.model.eval()
         except Exception as e:
             print(json.dumps({"success": False, "error": f"Failed to initialize DreamSim model: {str(e)}"}))
             sys.exit(1)

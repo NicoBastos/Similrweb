@@ -67,3 +67,6 @@ logs
 *.txt
 
 *.pyc
+
+# Models directory
+models/

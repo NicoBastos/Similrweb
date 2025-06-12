@@ -36,8 +36,15 @@ export async function embedImage(imageBuffer: Buffer): Promise<number[]> {
     // Execute Python script
     const { stdout, stderr } = await execAsync(`python3 "${pythonScript}" "${base64Image}"`);
     
-    if (stderr) {
+    // Only treat stderr as an error if we don't have valid stdout or if the process failed
+    // This allows warnings (like PEFT warnings) to be ignored while still catching real errors
+    if (!stdout && stderr) {
       throw new Error(`Python process error: ${stderr}`);
+    }
+    
+    // Log stderr warnings but don't fail the process
+    if (stderr) {
+      console.warn('Python process warning:', stderr.trim());
     }
     
     const result = JSON.parse(stdout.trim());
