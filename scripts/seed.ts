@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import { supabase } from '../packages/db/index.ts';
-import { embedImage } from '../packages/embed/index.ts';
+import { embedImage } from '../packages/embed/index.js';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
