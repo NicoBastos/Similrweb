@@ -6,6 +6,27 @@ import Link from "next/link";
 import { UsageIndicator } from "@/components/UsageIndicator";
 
 export default function Home() {
+  // Development flag to show under construction page
+  const underconstruction = true;
+
+  if (underconstruction) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center space-y-6 max-w-md mx-auto px-4">
+          <h1 className="text-4xl font-bold text-gradient">
+            Similrweb
+          </h1>
+          <h2 className="text-2xl font-semibold text-foreground/80">
+            Under Construction
+          </h2>
+          <p className="text-foreground/60">
+            Check back soon!
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       {/* Hero Section */}
