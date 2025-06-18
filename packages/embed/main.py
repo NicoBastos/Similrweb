@@ -235,30 +235,129 @@ class Embedder:
             }
 
     @modal.method()
-    async def embed_dom(self, html_content: str = None, html_base64: str = None) -> Dict[str, Any]:
+    async def embed_dom(self, url: str) -> Dict[str, Any]:
         try:
-            if html_base64:
-                # Generate embedding from base64-encoded HTML
-                feat = self.dom_embedder.embed_base64(html_base64)
-            elif html_content:
-                # Generate embedding from HTML string
-                feat = self.dom_embedder.embed_dom(html_content)
-            else:
+            # Fetch DOM content from URL using playwright
+            dom_content = await self._get_dom_from_url(url)
+            if not dom_content:
                 return {
                     "success": False,
-                    "error": "Either html_content or html_base64 parameter is required"
+                    "error": f"Failed to fetch DOM content from URL: {url}"
                 }
+            
+            # Generate embedding from fetched HTML
+            feat = self.dom_embedder.embed_dom(dom_content)
             
             return {
                 "success": True,
+                "url": url,
                 "embedding": feat.tolist(),
                 "dimensions": feat.shape[-1],
             }
         except Exception as e:
             return {
                 "success": False,
-                "error": f"DOM embedding failed: {str(e)}"
+                "error": f"DOM embedding failed: {str(e)}",
+                "url": url
             }
+
+    async def _get_dom_from_url(self, url: str) -> Optional[str]:
+        """Fetch DOM content from a URL using playwright with modal dismissal"""
+        page = await self.browser.new_page(viewport=VIEWPORT)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=SCREENSHOT_TIMEOUT)
+            
+            # Dismiss modals and popups similar to seed.ts
+            await self._dismiss_modals(page)
+            
+            # Get DOM content
+            dom_content = await page.content()
+            return dom_content
+            
+        except Exception as e:
+            print(f"Error fetching DOM from {url}: {str(e)}")
+            return None
+        finally:
+            await page.close()
+
+    async def _dismiss_modals(self, page):
+        """Dismiss modals and popups similar to seed.ts implementation"""
+        try:
+            # Strategy 1: Try ESC key first
+            await page.keyboard.press('Escape')
+            await page.wait_for_timeout(300)
+            
+            # Strategy 2: Comprehensive selector-based dismissal
+            close_selectors = [
+                # Cookie banners
+                '.cookie-banner button:not([class*="accept"]):not([class*="allow"])',
+                '.cookie-notice button:not([class*="accept"]):not([class*="allow"])',
+                '.gdpr-banner button:not([class*="accept"]):not([class*="allow"])',
+                '[data-cookie-banner] button:not([class*="accept"]):not([class*="allow"])',
+                'button[class*="cookie"]:not([class*="accept"]):not([class*="allow"])',
+                '.consent-banner button:not([class*="accept"]):not([class*="allow"])',
+                
+                # Generic close buttons
+                'button[aria-label*="close"]',
+                'button[aria-label*="dismiss"]',
+                'button[aria-label*="cancel"]',
+                'button[title*="close"]',
+                'button[title*="dismiss"]',
+                
+                # Modal close buttons
+                '.modal-close',
+                '.popup-close',
+                '.dialog-close',
+                '.overlay-close',
+                '.lightbox-close',
+                '[data-dismiss="modal"]',
+                '[data-close="modal"]',
+                '[data-modal-close]',
+                
+                # X buttons and icons
+                'button[class*="close"]',
+                '.close-button',
+                '.btn-close',
+                '.close-btn',
+                'button.close',
+                '[role="button"][aria-label*="close"]',
+            ]
+            
+            dismissed = False
+            for selector in close_selectors:
+                try:
+                    elements = await page.query_selector_all(selector)
+                    for element in elements:
+                        is_visible = await element.is_visible()
+                        if is_visible:
+                            await element.click()
+                            await page.wait_for_timeout(200)
+                            dismissed = True
+                            break
+                    if dismissed:
+                        break
+                except Exception:
+                    continue
+            
+            # Strategy 3: Click outside modal area (click on backdrop)
+            if not dismissed:
+                try:
+                    backdrop = await page.query_selector('.modal-backdrop, .overlay, .backdrop, [data-backdrop]')
+                    if backdrop and await backdrop.is_visible():
+                        await backdrop.click()
+                        await page.wait_for_timeout(200)
+                except Exception:
+                    pass
+            
+            # Strategy 4: Try ESC key again
+            await page.keyboard.press('Escape')
+            await page.wait_for_timeout(200)
+            
+            # Final wait for any animations to complete
+            await page.wait_for_timeout(500)
+            
+        except Exception as e:
+            print(f"Modal dismissal warning: {str(e)}")
 
 # ───────────────────────── 3.  FastAPI endpoints
 @app.function(image=image)
@@ -278,14 +377,13 @@ def web_generate_screenshot_and_embedding(item: dict):
 @app.function(image=image)
 @modal.fastapi_endpoint(method="POST")
 def web_embed_dom(item: dict):
-    """POST /dom   – body: {"dom": "<html>"} or {"dom_base64": "<base64_html>"}"""
-    dom_content = item.get("dom")
-    dom_base64 = item.get("dom_base64")
+    """POST /dom   – body: {"url": "<url>"}"""
+    url = item.get("url")
     
-    if dom_content or dom_base64:
-        return Embedder().embed_dom.remote(html_content=dom_content, html_base64=dom_base64)
-    else:
-        return {"success": False, "error": "Either dom or dom_base64 parameter is required"}
+    if not url:
+        return {"success": False, "error": "URL parameter is required"}
+    
+    return Embedder().embed_dom.remote(url)
 
 @app.function(image=image)
 @modal.fastapi_endpoint(method="GET")
