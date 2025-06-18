@@ -178,8 +178,8 @@ export async function POST(request: NextRequest) {
 
     console.log('🔍 Finding similar websites for:', url);
 
-    // Step 1: Get embedding for the provided URL
-    console.log('📊 Getting embedding for URL...');
+    // Step 1: Get both screenshot and DOM embeddings for the provided URL
+    console.log('📊 Getting embeddings for URL...');
     const embedResponse = await fetch(`${request.nextUrl.origin}/api/embed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -191,33 +191,50 @@ export async function POST(request: NextRequest) {
       console.error('❌ Embed endpoint failed:', embedError);
       return NextResponse.json(
         { 
-          error: "Failed to generate embedding", 
+          error: "Failed to generate embeddings", 
           details: embedError.details || embedError.error 
         },
         { status: 500 }
       );
     }
 
-    const embedResult = await embedResponse.json() as { embedding?: number[]; screenshot_url?: string };
-    const queryEmbedding = embedResult.embedding;
+    const embedResult = await embedResponse.json() as { 
+      screenshot_embedding?: number[]; 
+      dom_embedding?: number[];
+      screenshot_url?: string;
+      screenshot_dimensions?: number;
+      dom_dimensions?: number;
+    };
+    const queryScreenshotEmbedding = embedResult.screenshot_embedding;
+    const queryDOMEmbedding = embedResult.dom_embedding;
     const screenshotUrl = embedResult.screenshot_url;
 
-    if (!queryEmbedding || !Array.isArray(queryEmbedding)) {
-      console.error('❌ Invalid embedding received:', embedResult);
+    if (!queryScreenshotEmbedding || !Array.isArray(queryScreenshotEmbedding)) {
+      console.error('❌ Invalid screenshot embedding received:', embedResult);
       return NextResponse.json(
-        { error: "Invalid embedding generated" },
+        { error: "Invalid screenshot embedding generated" },
         { status: 500 }
       );
     }
 
-    console.log(`✅ Embedding generated: ${queryEmbedding.length} dimensions`);
+    if (!queryDOMEmbedding || !Array.isArray(queryDOMEmbedding)) {
+      console.error('❌ Invalid DOM embedding received:', embedResult);
+      return NextResponse.json(
+        { error: "Invalid DOM embedding generated" },
+        { status: 500 }
+      );
+    }
+
+    console.log(`✅ Embeddings generated: ${queryScreenshotEmbedding.length} screenshot dimensions, ${queryDOMEmbedding.length} DOM dimensions`);
 
     // Step 2: Check if the original website exists in database and handle storage
     console.log('🔍 Checking if original website exists in database...');
+    // Performance optimization: Use fewer columns and limit to single result
     const { data: originalWebsite, error: originalError } = await supabase
       .from('landing_vectors')
       .select('url, screenshot_url, id, created_at')
       .eq('url', url)
+      .limit(1)
       .single();
 
     console.log('🔍 Original website query result:', {
@@ -260,7 +277,8 @@ export async function POST(request: NextRequest) {
         try {
           const { error: insertError } = await supabase.rpc('insert_landing_vector', { 
             p_url: url, 
-            p_emb: queryEmbedding, 
+            p_screenshot_emb: queryScreenshotEmbedding,
+            p_dom_emb: queryDOMEmbedding,
             p_shot: screenshotUrl
           });
 
@@ -277,12 +295,13 @@ export async function POST(request: NextRequest) {
       console.warn('⚠️ Could not query for original website:', originalError);
     }
 
-    // Step 3: Query Supabase for similar embeddings using match_vectors
+    // Step 3: Query Supabase for similar embeddings using match_combined_vectors with both embeddings
     console.log('🔎 Searching for similar websites in database...');
     const matchCount = 10; // Return top 10 similar websites
     
-    const { data: similarWebsites, error: dbError } = await supabase.rpc('match_vectors', {
-      query_emb: queryEmbedding,
+    const { data: similarWebsites, error: dbError } = await supabase.rpc('match_combined_vectors', {
+      query_screenshot_emb: queryScreenshotEmbedding,
+      query_dom_emb: queryDOMEmbedding,
       match_count: matchCount
     });
 
@@ -373,7 +392,8 @@ export async function POST(request: NextRequest) {
       similar_websites: transformedResults,
       original_website: originalWebsiteInfo,
       query_url: url,
-      query_embedding_dimensions: queryEmbedding.length,
+      query_screenshot_embedding_dimensions: queryScreenshotEmbedding.length,
+      query_dom_embedding_dimensions: queryDOMEmbedding.length,
       processed_at: new Date().toISOString(),
       cache_status: 'MISS'
     };

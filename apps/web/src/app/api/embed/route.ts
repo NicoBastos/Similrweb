@@ -3,14 +3,17 @@ import { createHash } from 'node:crypto';
 import { supabase } from '@website-similarity/db';
 
 // Modal endpoint configuration
-const MODAL_ENDPOINT = 'https://nicobastos--website-embed-service-web-generate-screensho-5f0b0c.modal.run';
-const MODAL_TIMEOUT = 30000; // 30 seconds
+const MODAL_SCREENSHOT_ENDPOINT = 'https://nicobastos--website-embed-service-web-generate-screensho-5f0b0c.modal.run';
+const MODAL_DOM_ENDPOINT = 'https://nicobastos--website-embed-service-web-embed-dom.modal.run';
+const MODAL_TIMEOUT = 45000; // 45 seconds - increased for dual embedding reliability
 
 interface CachedEmbedResult {
   data: {
     url: string;
-    embedding: number[];
-    dimensions: number;
+    screenshot_embedding: number[];
+    screenshot_dimensions: number;
+    dom_embedding: number[];
+    dom_dimensions: number;
     success: boolean;
     screenshot_url?: string;
   };
@@ -22,17 +25,38 @@ type EmbedResultData = CachedEmbedResult['data'];
 
 // In-memory cache for embed results (expires after 60 minutes since these are expensive)
 const embedCache = new Map<string, CachedEmbedResult>();
-const EMBED_CACHE_DURATION = 60 * 60 * 1000; // 60 minutes
+const EMBED_CACHE_DURATION = 4 * 60 * 60 * 1000; // 4 hours - embeddings are expensive and rarely change
 
-// Clean up expired embed cache entries periodically
+// Clean up expired embed cache entries periodically with size limit
+const MAX_CACHE_SIZE = 1000; // Limit cache to 1000 entries
 const embedCleanupInterval = setInterval(() => {
   const now = Date.now();
+  let deletedCount = 0;
+  
+  // First: Remove expired entries
   for (const [key, value] of embedCache.entries()) {
     if (now > value.expiresAt) {
       embedCache.delete(key);
+      deletedCount++;
     }
   }
-}, 10 * 60 * 1000); // Clean up every 10 minutes
+  
+  // Second: If still over limit, remove oldest entries
+  if (embedCache.size > MAX_CACHE_SIZE) {
+    const entries = Array.from(embedCache.entries())
+      .sort(([,a], [,b]) => a.timestamp - b.timestamp);
+    
+    const toDelete = embedCache.size - MAX_CACHE_SIZE;
+    for (let i = 0; i < toDelete; i++) {
+      embedCache.delete(entries[i][0]);
+      deletedCount++;
+    }
+  }
+  
+  if (deletedCount > 0) {
+    console.log(`🧹 Cleaned up ${deletedCount} cache entries, size: ${embedCache.size}`);
+  }
+}, 5 * 60 * 1000); // Clean up every 5 minutes (more frequent)
 
 // Graceful cleanup on process exit
 process.on('SIGINT', () => {
@@ -74,9 +98,9 @@ async function generateScreenshotAndEmbedding(url: string): Promise<{
   error?: string;
 }> {
   try {
-    console.log('🚀 Calling Modal endpoint for', new URL(url).hostname);
+    console.log('🚀 Calling screenshot Modal endpoint for', new URL(url).hostname);
     
-    const response = await fetch(MODAL_ENDPOINT, {
+    const response = await fetch(MODAL_SCREENSHOT_ENDPOINT, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -86,16 +110,16 @@ async function generateScreenshotAndEmbedding(url: string): Promise<{
     });
 
     if (!response.ok) {
-      throw new Error(`Modal endpoint responded with ${response.status}: ${response.statusText}`);
+      throw new Error(`Screenshot Modal endpoint responded with ${response.status}: ${response.statusText}`);
     }
 
     const result = await response.json();
     
     if (!result.success) {
-      throw new Error(result.error || 'Modal endpoint returned success: false');
+      throw new Error(result.error || 'Screenshot Modal endpoint returned success: false');
     }
 
-    console.log('✅ Modal endpoint completed for', new URL(url).hostname, `(${result.dimensions} dimensions)`);
+    console.log('✅ Screenshot Modal endpoint completed for', new URL(url).hostname, `(${result.dimensions} dimensions)`);
     
     return {
       success: true,
@@ -106,7 +130,53 @@ async function generateScreenshotAndEmbedding(url: string): Promise<{
     
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error('❌ Modal endpoint failed for', url, ':', errorMsg);
+    console.error('❌ Screenshot Modal endpoint failed for', url, ':', errorMsg);
+    return {
+      success: false,
+      error: errorMsg,
+    };
+  }
+}
+
+async function generateDOMEmbedding(url: string): Promise<{
+  success: boolean;
+  embedding?: number[];
+  dimensions?: number;
+  error?: string;
+}> {
+  try {
+    console.log('🚀 Calling DOM Modal endpoint for', new URL(url).hostname);
+    
+    const response = await fetch(MODAL_DOM_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(MODAL_TIMEOUT),
+    });
+
+    if (!response.ok) {
+      throw new Error(`DOM Modal endpoint responded with ${response.status}: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'DOM Modal endpoint returned success: false');
+    }
+
+    console.log('✅ DOM Modal endpoint completed for', new URL(url).hostname, `(${result.dimensions} dimensions)`);
+    
+    return {
+      success: true,
+      embedding: result.embedding,
+      dimensions: result.dimensions,
+    };
+    
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error('❌ DOM Modal endpoint failed for', url, ':', errorMsg);
     return {
       success: false,
       error: errorMsg,
@@ -147,45 +217,66 @@ export async function POST(request: NextRequest) {
 
     console.log('🚀 Starting embed process for', url);
     
-    // Generate screenshot and embedding via Modal endpoint
-    const modalResult = await generateScreenshotAndEmbedding(url);
+    // Generate both screenshot and DOM embeddings in parallel
+    const [screenshotResult, domResult] = await Promise.all([
+      generateScreenshotAndEmbedding(url),
+      generateDOMEmbedding(url)
+    ]);
     
-    if (!modalResult.success || !modalResult.embedding || !modalResult.screenshot || !modalResult.dimensions) {
+    // Check if both embeddings were successful
+    if (!screenshotResult.success || !screenshotResult.embedding || !screenshotResult.screenshot || !screenshotResult.dimensions) {
       return NextResponse.json({ 
-        error: 'Screenshot and embedding generation failed',
-        details: modalResult.error,
+        error: 'Screenshot embedding generation failed',
+        details: screenshotResult.error,
         success: false 
       }, { status: 500 });
     }
 
-    // Upload screenshot to storage
-    console.log('☁️ Uploading screenshot to storage for', new URL(url).hostname);
-    const screenshotBuffer = Buffer.from(modalResult.screenshot, 'base64');
-    const fileName = `screens/${Date.now()}-${new URL(url).hostname}.jpg`;
-    const { error: uploadError } = await supabase
+    if (!domResult.success || !domResult.embedding || !domResult.dimensions) {
+      return NextResponse.json({ 
+        error: 'DOM embedding generation failed',
+        details: domResult.error,
+        success: false 
+      }, { status: 500 });
+    }
+
+    // Performance optimization: Upload screenshot in background, don't block response
+    const screenshotBuffer = Buffer.from(screenshotResult.screenshot, 'base64');
+    const hostHash = createHash('sha256').update(new URL(url).hostname).digest('hex').substring(0, 8);
+    const fileName = `screens/${Date.now()}-${hostHash}.jpg`;
+    
+    // Start upload in background - don't await
+    void supabase
       .storage
       .from('screenshots')
       .upload(fileName, screenshotBuffer, { 
         contentType: 'image/jpeg', 
-        upsert: true 
-      });
+        upsert: true,
+        cacheControl: '3600'
+      })
+      .then(({ error }) => {
+        if (error) {
+          console.warn('⚠️ Background screenshot upload failed:', error);
+        } else {
+          console.log('✅ Background screenshot upload completed for', new URL(url).hostname);
+        }
+      })
+      .catch(err => console.warn('⚠️ Screenshot upload error:', err));
 
-    let screenshotUrl = null;
-    if (uploadError) {
-      console.warn('⚠️ Failed to upload screenshot:', uploadError);
-    } else {
-      const { data: { publicUrl } } = supabase
-        .storage
-        .from('screenshots')
-        .getPublicUrl(fileName);
-      screenshotUrl = publicUrl;
-      console.log('✅ Screenshot uploaded to storage');
-    }
+    // Get public URL immediately (optimistic)
+    const { data: { publicUrl } } = supabase
+      .storage
+      .from('screenshots')
+      .getPublicUrl(fileName);
+    
+    const screenshotUrl = publicUrl;
     
     const result = { 
       url,
-      embedding: modalResult.embedding,
-      dimensions: modalResult.dimensions,
+      screenshot_embedding: screenshotResult.embedding,
+      screenshot_dimensions: screenshotResult.dimensions,
+      dom_embedding: domResult.embedding,
+      dom_dimensions: domResult.dimensions,
       success: true,
       screenshot_url: screenshotUrl || undefined
     };
@@ -195,10 +286,12 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json(result, {
       headers: {
-        'Cache-Control': 'public, max-age=3600, s-maxage=7200', // 1 hour browser, 2 hours CDN
+        'Cache-Control': 'public, max-age=7200, s-maxage=14400', // 2 hour browser, 4 hours CDN - longer cache for expensive operations
         'X-Cache': 'MISS',
         'X-Cache-Key': cacheKey.substring(0, 8) + '...',
-        'X-Cache-Size': embedCache.size.toString()
+        'X-Cache-Size': embedCache.size.toString(),
+        'Vary': 'Accept-Encoding', // Enable compression
+        'X-Response-Time': Date.now().toString() // For debugging performance
       }
     });
     
@@ -216,19 +309,35 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   try {
-    // Health check the Modal endpoint
-    const healthResponse = await fetch(`${MODAL_ENDPOINT}/health`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(5000), // 5 second timeout for health check
-    });
+    // Health check both Modal endpoints
+    const [screenshotHealthResponse, domHealthResponse] = await Promise.all([
+      fetch(`${MODAL_SCREENSHOT_ENDPOINT}/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000), // 5 second timeout for health check
+      }).catch(() => ({ ok: false, status: 0 })),
+      fetch(`${MODAL_DOM_ENDPOINT}/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(5000), // 5 second timeout for health check
+      }).catch(() => ({ ok: false, status: 0 }))
+    ]);
     
-    const isHealthy = healthResponse.ok;
+    const isScreenshotHealthy = screenshotHealthResponse.ok;
+    const isDOMHealthy = domHealthResponse.ok;
+    const isHealthy = isScreenshotHealthy && isDOMHealthy;
     
     const healthData = {
       status: isHealthy ? 'healthy' : 'unhealthy',
-      service: 'CLIP embedding with screenshot via Modal',
-      modal_endpoint: MODAL_ENDPOINT,
-      modal_status: healthResponse.status,
+      service: 'Screenshot and DOM embeddings via Modal',
+      screenshot_endpoint: {
+        url: MODAL_SCREENSHOT_ENDPOINT,
+        status: screenshotHealthResponse.status,
+        healthy: isScreenshotHealthy
+      },
+      dom_endpoint: {
+        url: MODAL_DOM_ENDPOINT,
+        status: domHealthResponse.status,
+        healthy: isDOMHealthy
+      },
       embed_cache_size: embedCache.size,
       embed_cache_entries: Array.from(embedCache.keys()).map(key => ({
         key: key.substring(0, 8) + '...',
@@ -246,8 +355,9 @@ export async function GET() {
   } catch (error) {
     return NextResponse.json({
       status: 'unhealthy',
-      service: 'CLIP embedding with screenshot via Modal',
-      modal_endpoint: MODAL_ENDPOINT,
+      service: 'Screenshot and DOM embeddings via Modal',
+      screenshot_endpoint: MODAL_SCREENSHOT_ENDPOINT,
+      dom_endpoint: MODAL_DOM_ENDPOINT,
       error: error instanceof Error ? error.message : 'Unknown error',
       embed_cache_size: embedCache.size,
       timestamp: new Date().toISOString()

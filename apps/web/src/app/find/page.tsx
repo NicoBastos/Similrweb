@@ -129,23 +129,17 @@ export default function FindPage() {
 
       console.log('🔍 Cache miss, fetching from API for:', normalizedUrl);
       
-      // Show fake progress steps for 5 seconds
+      // Show progress but don't artificially delay
       setShowProgress(true);
       
-      // Start the API call in the background
-      const apiPromise = fetch("/api/find-similar", {
+      // Make API call immediately - no artificial delay
+      const response = await fetch("/api/find-similar", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ url: normalizedUrl }),
       });
-
-      // Wait for the fake progress to complete (5 seconds total)
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      
-      // Now get the API response
-      const response = await apiPromise;
       const data = await response.json();
 
       if (!response.ok) {

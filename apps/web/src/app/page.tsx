@@ -7,7 +7,7 @@ import { UsageIndicator } from "@/components/UsageIndicator";
 
 export default function Home() {
   // Development flag to show under construction page
-  const underconstruction = true;
+  const underconstruction = false;
 
   if (underconstruction) {
     return (
