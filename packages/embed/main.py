@@ -1,10 +1,11 @@
 """
-Website screenshot + CLIP embedding service  •  Modal 1.0-compatible
-– Pre-downloads CLIP weights into the image
+Website screenshot + DreamSim embedding service  •  Modal 1.0-compatible
+– Pre-downloads DreamSim weights into the image
 – Keeps one warm container with model + Chromium
 – FastAPI endpoints:
       POST   /          {"url": "<site>"}  → screenshot + embedding
       POST   /image     {"image": "<base64>"}  → embedding
+      POST   /dom       {"dom": "<html>"}  → dom embedding
       GET    /health    → {"status": "ok", …}
 """
 
@@ -12,7 +13,21 @@ import io, base64, modal
 from typing import Dict, Any, Optional
 from PIL import Image
 import torch
-import open_clip
+import warnings
+from contextlib import contextmanager
+import os
+import sys
+
+@contextmanager
+def suppress_stdout():
+    """Context manager to suppress stdout during model loading"""
+    with open(os.devnull, "w") as devnull:
+        old_stdout = sys.stdout
+        sys.stdout = devnull
+        try:
+            yield
+        finally:
+            sys.stdout = old_stdout
 
 # ───────────────────────── 0.  Build image (weights baked in)
 image = (
@@ -22,19 +37,26 @@ image = (
             "numpy==1.24.4",
             "fastapi[standard]==0.115.6",
             "playwright==1.41.0",
-            "open-clip-torch==2.24.0",
-            "torch==2.1.2",
-            "torchvision==0.16.2",
+            "torch>=2.6.0",
+            "torchvision>=0.19.0",
             "timm>=0.9.16",
             "Pillow==10.2.0",
             "requests==2.31.0",
+            "dreamsim",
+            "transformers>=4.44.0",
+            "beautifulsoup4==4.12.2",
         ]
     )
-    # download the ViT-B/32 checkpoint at build-time
+    # download the DreamSim checkpoint at build-time
     .run_commands(
-        'python -c "import open_clip, torch; '
-        'open_clip.create_model_and_transforms(\'ViT-B-32\', '
-        'pretrained=\'laion2b_s34b_b79k\')"'
+        'python -c "from dreamsim import dreamsim; '
+        'dreamsim(pretrained=True, device=\'cpu\', dreamsim_type=\'open_clip_vitb32\')"'
+    )
+    # download the MarkupLM checkpoint at build-time
+    .run_commands(
+        'python -c "from transformers import MarkupLMProcessor, MarkupLMModel; '
+        'MarkupLMProcessor.from_pretrained(\'microsoft/markuplm-base\'); '
+        'MarkupLMModel.from_pretrained(\'microsoft/markuplm-base\')"'
     )
     .run_commands("playwright install chromium && playwright install-deps chromium")
 )
@@ -46,38 +68,93 @@ VIEWPORT = {"width": 1280, "height": 720}
 JPEG_Q   = 80
 SCREENSHOT_TIMEOUT = 6000  # ms
 
-class CLIPEmbedder:
+class DreamSimEmbedder:
     def __init__(self):
         self.model = None
         self.preprocess = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.setup()
 
     def setup(self):
-        """Initialize the CLIP model and preprocessing transform"""
+        """Initialize the DreamSim model and preprocessing transform"""
         if self.model is None:
-            self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-                "ViT-B-32", pretrained="laion2b_s34b_b79k"
+            from dreamsim import dreamsim
+            
+            # Use OpenCLIP single-branch model for ~3x speedup over ensemble
+            self.model, self.preprocess = dreamsim(
+                pretrained=True, 
+                device=self.device,
+                dreamsim_type="open_clip_vitb32"
             )
             self.model.eval()
 
     def embed_image(self, img: Image.Image) -> torch.Tensor:
-        """Generate embedding for a PIL Image"""
+        """Generate embedding for a PIL Image using DreamSim"""
         if not isinstance(img, Image.Image):
             raise ValueError("Input must be a PIL Image")
         
         img = img.convert("RGB")
-        tens = self.preprocess(img).unsqueeze(0)
+        img_tensor = self.preprocess(img).to(self.device)
         
         with torch.no_grad():
-            feat = self.model.encode_image(tens)
-            feat = feat / feat.norm(dim=-1, keepdim=True)
+            # Use DreamSim's embed method to get single image embedding
+            embedding = self.model.embed(img_tensor)
         
-        return feat.squeeze()
+        return embedding.squeeze().cpu()
 
     def embed_buffer(self, buffer: bytes) -> torch.Tensor:
         """Generate embedding for an image buffer"""
-        img = Image.open(io.BytesIO(buffer)).convert("RGB")
+        img = Image.open(io.BytesIO(buffer))
         return self.embed_image(img)
+
+class DOMEmbedder:
+    def __init__(self):
+        self.processor = None
+        self.model = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.setup()
+
+    def setup(self):
+        """Initialize the MarkupLM model and tokenizer"""
+        if self.model is None:
+            # Suppress warnings and stdout during model loading
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                with suppress_stdout():
+                    from transformers import MarkupLMProcessor, MarkupLMModel
+                    
+                    # Load MarkupLM processor (feature extractor + tokenizer) and model
+                    self.processor = MarkupLMProcessor.from_pretrained("microsoft/markuplm-base")
+                    self.model = MarkupLMModel.from_pretrained("microsoft/markuplm-base")
+                    self.model.to(self.device)
+                    self.model.eval()
+
+    def embed_dom(self, html_content: str) -> torch.Tensor:
+        """Generate embedding for DOM tree using MarkupLM with Processor"""
+        # Processor handles HTML parsing and tokenization
+        encoding = self.processor(
+            html_content,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512
+        )
+
+        # Move tensors to device
+        encoding = {k: v.to(self.device) for k, v in encoding.items()}
+
+        # Generate embeddings
+        with torch.no_grad():
+            outputs = self.model(**encoding)
+            embedding = outputs.last_hidden_state[:, 0, :]  # CLS token
+
+        return embedding.squeeze().cpu()
+
+    def embed_base64(self, base64_html: str) -> torch.Tensor:
+        """Generate embedding for a base64-encoded HTML string"""
+        # Decode base64 HTML content
+        html_content = base64.b64decode(base64_html).decode('utf-8')
+        return self.embed_dom(html_content)
 
 # ───────────────────────── 2.  Warm container
 @app.cls(image=image, cpu=2.0, memory=2048, timeout=300, min_containers=1)
@@ -86,8 +163,11 @@ class Embedder:
     async def setup(self):
         from playwright.async_api import async_playwright
         
-        # Initialize CLIP embedder
-        self.embedder = CLIPEmbedder()
+        # Initialize DreamSim embedder
+        self.embedder = DreamSimEmbedder()
+        
+        # Initialize DOM embedder
+        self.dom_embedder = DOMEmbedder()
         
         # Initialize browser
         self.pw = await async_playwright().start()
@@ -154,6 +234,32 @@ class Embedder:
                 "error": f"Embedding failed: {str(e)}"
             }
 
+    @modal.method()
+    async def embed_dom(self, html_content: str = None, html_base64: str = None) -> Dict[str, Any]:
+        try:
+            if html_base64:
+                # Generate embedding from base64-encoded HTML
+                feat = self.dom_embedder.embed_base64(html_base64)
+            elif html_content:
+                # Generate embedding from HTML string
+                feat = self.dom_embedder.embed_dom(html_content)
+            else:
+                return {
+                    "success": False,
+                    "error": "Either html_content or html_base64 parameter is required"
+                }
+            
+            return {
+                "success": True,
+                "embedding": feat.tolist(),
+                "dimensions": feat.shape[-1],
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"DOM embedding failed: {str(e)}"
+            }
+
 # ───────────────────────── 3.  FastAPI endpoints
 @app.function(image=image)
 @modal.fastapi_endpoint(method="POST")
@@ -168,6 +274,18 @@ def web_generate_screenshot_and_embedding(item: dict):
         return Embedder().embed_image.remote(image)
     else:
         return {"success": False, "error": "Either URL or image parameter is required"}
+
+@app.function(image=image)
+@modal.fastapi_endpoint(method="POST")
+def web_embed_dom(item: dict):
+    """POST /dom   – body: {"dom": "<html>"} or {"dom_base64": "<base64_html>"}"""
+    dom_content = item.get("dom")
+    dom_base64 = item.get("dom_base64")
+    
+    if dom_content or dom_base64:
+        return Embedder().embed_dom.remote(html_content=dom_content, html_base64=dom_base64)
+    else:
+        return {"success": False, "error": "Either dom or dom_base64 parameter is required"}
 
 @app.function(image=image)
 @modal.fastapi_endpoint(method="GET")
