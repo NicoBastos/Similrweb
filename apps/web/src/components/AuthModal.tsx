@@ -78,7 +78,7 @@ export function AuthModal({ isOpen, onClose, initialMode = 'signup' }: AuthModal
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <Card className="w-full max-w-md border-primary/20" style={{ backgroundColor: '#0a0a0a' }}>
+      <Card className="w-full max-w-md border-primary/20 bg-background/95 backdrop-blur-sm">
         <CardHeader className="relative">
           <button
             onClick={handleClose}

@@ -41,6 +41,7 @@ export default function FindPage() {
   const [isRateLimited, setIsRateLimited] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
   const [currentUrl, setCurrentUrl] = useState("");
+  const [originalImageError, setOriginalImageError] = useState(false);
   
   const { refreshUsage } = useAuth();
 
@@ -111,6 +112,10 @@ export default function FindPage() {
     setIsRateLimited(false);
     setCacheHit(false);
     setShowProgress(false);
+    setOriginalImageError(false);
+    // Clear previous results immediately when starting a new search
+    setResults([]);
+    setOriginalWebsite(null);
     
     try {
       const normalizedUrl = normalizeUrl(url.trim());
@@ -124,6 +129,8 @@ export default function FindPage() {
         setOriginalWebsite(cachedData.original);
         setCacheHit(true);
         setIsLoading(false);
+        // Reset image error state for cached results too
+        setOriginalImageError(false);
         return;
       }
 
@@ -188,8 +195,8 @@ export default function FindPage() {
   };
 
   const handleProgressComplete = () => {
-    // Progress animation completed, results should be ready
-    setShowProgress(false);
+    // Progress animation completed, but don't hide progress until API actually completes
+    // The progress will be hidden when setIsLoading(false) is called after API response
   };
 
   const normalizeUrl = (inputUrl: string) => {
@@ -207,6 +214,16 @@ export default function FindPage() {
     } catch {
       return false;
     }
+  };
+
+  const handleImageError = () => {
+    console.error('🖼️ Original website image failed to load:', originalWebsite?.screenshot);
+    setOriginalImageError(true);
+  };
+
+  const handleImageLoad = () => {
+    console.log('✅ Original website image loaded successfully:', originalWebsite?.screenshot);
+    setOriginalImageError(false);
   };
 
   return (
@@ -284,7 +301,7 @@ export default function FindPage() {
 
           {/* Progress Steps */}
           <ProgressSteps 
-            isActive={showProgress && isLoading}
+            isActive={isLoading && showProgress}
             onComplete={handleProgressComplete}
             websiteUrl={currentUrl}
           />
@@ -345,7 +362,7 @@ export default function FindPage() {
                     <Card className="w-full max-w-2xl border-primary/20 bg-gradient-to-br from-primary/5 via-transparent to-primary/10">
                       <CardHeader className="p-0">
                         <div className="relative aspect-video rounded-t-lg overflow-hidden bg-muted">
-                          {originalWebsite.screenshot ? (
+                          {originalWebsite.screenshot && !originalImageError ? (
                             <Image
                               src={originalWebsite.screenshot}
                               alt={`Screenshot of ${originalWebsite.title || originalWebsite.url}`}
@@ -353,16 +370,18 @@ export default function FindPage() {
                               className="object-cover"
                               sizes="(max-width: 768px) 100vw, 672px"
                               priority
-                              onError={() => {
-                                console.error('🖼️ Image failed to load:', originalWebsite.screenshot);
-                              }}
-                              onLoad={() => {
-                                console.log('✅ Image loaded successfully:', originalWebsite.screenshot);
-                              }}
+                              onError={handleImageError}
+                              onLoad={handleImageLoad}
                             />
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center bg-muted">
-                              <p className="text-muted-foreground">Screenshot processing...</p>
+                            <div className="w-full h-full flex flex-col items-center justify-center bg-muted text-center p-8">
+                              <Globe className="w-12 h-12 text-muted-foreground/50 mb-3" />
+                              <p className="text-muted-foreground text-sm mb-1">
+                                {originalImageError ? 'Screenshot temporarily unavailable' : 'Screenshot processing...'}
+                              </p>
+                              <p className="text-muted-foreground/70 text-xs">
+                                {originalImageError ? 'Please try again in a few moments' : 'This may take a few moments for new websites'}
+                              </p>
                             </div>
                           )}
                           <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent" />

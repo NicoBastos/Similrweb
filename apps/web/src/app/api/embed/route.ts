@@ -240,36 +240,65 @@ export async function POST(request: NextRequest) {
       }, { status: 500 });
     }
 
-    // Performance optimization: Upload screenshot in background, don't block response
+    // Upload screenshot and wait for completion to ensure URL is valid
     const screenshotBuffer = Buffer.from(screenshotResult.screenshot, 'base64');
     const hostHash = createHash('sha256').update(new URL(url).hostname).digest('hex').substring(0, 8);
     const fileName = `screens/${Date.now()}-${hostHash}.jpg`;
     
-    // Start upload in background - don't await
-    void supabase
+    console.log('☁️ Uploading screenshot to storage for', new URL(url).hostname);
+    const { error: uploadError } = await supabase
       .storage
       .from('screenshots')
       .upload(fileName, screenshotBuffer, { 
         contentType: 'image/jpeg', 
         upsert: true,
         cacheControl: '3600'
-      })
-      .then(({ error }) => {
-        if (error) {
-          console.warn('⚠️ Background screenshot upload failed:', error);
-        } else {
-          console.log('✅ Background screenshot upload completed for', new URL(url).hostname);
-        }
-      })
-      .catch(err => console.warn('⚠️ Screenshot upload error:', err));
+      });
 
-    // Get public URL immediately (optimistic)
-    const { data: { publicUrl } } = supabase
-      .storage
-      .from('screenshots')
-      .getPublicUrl(fileName);
+    let screenshotUrl: string | undefined;
     
-    const screenshotUrl = publicUrl;
+    if (uploadError) {
+      console.warn('⚠️ Screenshot upload failed:', uploadError);
+      // Fallback: Return base64 data URL if storage upload failed
+      const base64DataUrl = `data:image/jpeg;base64,${screenshotResult.screenshot}`;
+      console.log('🔄 Using base64 fallback for screenshot');
+      screenshotUrl = base64DataUrl;
+    } else {
+      console.log('✅ Screenshot upload completed for', new URL(url).hostname);
+      
+      // Verify the file exists and is accessible before returning URL
+      try {
+        const { error: downloadError } = await supabase
+          .storage
+          .from('screenshots')
+          .download(fileName);
+          
+        if (downloadError) {
+          console.warn('⚠️ File verification failed, uploaded file not accessible:', downloadError);
+          // Fallback: Return base64 data URL if file is not accessible
+          const base64DataUrl = `data:image/jpeg;base64,${screenshotResult.screenshot}`;
+          console.log('🔄 Using base64 fallback due to verification failure');
+          screenshotUrl = base64DataUrl;
+        } else {
+          console.log('✅ File verification successful, file is accessible');
+          // Get public URL only after successful upload and verification
+          const { data: { publicUrl } } = supabase
+            .storage
+            .from('screenshots')
+            .getPublicUrl(fileName);
+          screenshotUrl = publicUrl;
+          
+          // Log the final URL for debugging
+          console.log('🔗 Generated screenshot URL:', screenshotUrl);
+        }
+      } catch (verifyError) {
+        console.warn('⚠️ File verification error:', verifyError);
+        // Fallback: Return base64 data URL if verification fails
+        const base64DataUrl = `data:image/jpeg;base64,${screenshotResult.screenshot}`;
+        console.log('🔄 Using base64 fallback due to verification error');
+        screenshotUrl = base64DataUrl;
+      }
+    }
     
     const result = { 
       url,

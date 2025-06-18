@@ -263,7 +263,7 @@ export async function POST(request: NextRequest) {
       console.log('🆕 Website not in database, using new screenshot...');
       originalWebsiteInfo = {
         url: url,
-        screenshot: screenshotUrl || `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300"><rect width="400" height="300" fill="#f3f4f6"/><text x="200" y="150" text-anchor="middle" dy="0.3em" font-family="Arial, sans-serif" font-size="14" fill="#6b7280">Screenshot unavailable</text></svg>`).toString('base64')}`,
+        screenshot: screenshotUrl, // Only set if screenshot upload was successful
         title: new URL(url).hostname,
         id: null,
         created_at: new Date().toISOString(),
@@ -302,6 +302,7 @@ export async function POST(request: NextRequest) {
     const { data: similarWebsites, error: dbError } = await supabase.rpc('match_combined_vectors', {
       query_screenshot_emb: queryScreenshotEmbedding,
       query_dom_emb: queryDOMEmbedding,
+      query_url: url, // Pass the URL to exclude self-matches
       match_count: matchCount
     });
 
@@ -401,6 +402,8 @@ export async function POST(request: NextRequest) {
     console.log('📤 API Response:', {
       similarCount: transformedResults.length,
       hasOriginal: !!originalWebsiteInfo,
+      originalHasScreenshot: !!originalWebsiteInfo?.screenshot,
+      originalScreenshotUrl: originalWebsiteInfo?.screenshot?.substring(0, 100) + '...',
       originalData: originalWebsiteInfo
     });
 
