@@ -6,7 +6,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Similrweb - AI-Powered Website Similarity Analysis",
+  title: "Similrweb",
   description: "Discover design patterns, analyze visual similarities, and understand web aesthetics with our advanced AI-powered comparison tool.",
 };
 
